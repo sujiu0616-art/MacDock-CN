@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="MacDock.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="tests/MacDock.Tests/MacDock.Tests.csproj" />
+  </Folder>
+</Solution>
