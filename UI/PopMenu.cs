@@ -45,6 +45,12 @@ internal sealed class PopMenu : IDisposable
 
     static readonly List<PopMenu> Open = [];
 
+    /// <summary>钩子要用的只读视图。</summary>
+    internal static IReadOnlyList<PopMenu> OpenMenus => Open;
+
+    /// <summary>菜单窗口的句柄（用于判断点击是否落在菜单内）。</summary>
+    internal IntPtr WindowHandle => new System.Windows.Interop.WindowInteropHelper(_window).Handle;
+
     /// <summary>关掉所有打开的弹出菜单（Dock/菜单栏被点击时调用）。</summary>
     internal static void CloseAllOpen()
     {
@@ -247,7 +253,7 @@ internal sealed class PopMenu : IDisposable
     /// <summary>在屏幕坐标处弹出（自动夹在工作区内）。</summary>
     public void Show(int x, int y)
     {
-        Log.Info($"PopMenu: show at {x},{y}");
+        Log.Info($"PopMenu: opened at {x},{y}");
         _window.Show();
         _window.UpdateLayout();
 
@@ -269,6 +275,7 @@ internal sealed class PopMenu : IDisposable
         _window.BeginAnimation(UIElement.OpacityProperty,
             new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(90)));
         if (!Open.Contains(this)) Open.Add(this);
+        MouseHook.Ensure();
         _watch.Start();
     }
 
@@ -281,11 +288,12 @@ internal sealed class PopMenu : IDisposable
 
     public void Close()
     {
-        Log.Info($"PopMenu: Close() called, visible={_window.IsVisible}\n{Environment.StackTrace}");
+        Log.Info($"PopMenu: closed ({_window.ActualWidth:0}x{_window.ActualHeight:0})");
         if (!_window.IsVisible) return;
         _watch.Stop();
         _window.Hide();
         Open.Remove(this);
+        if (Open.Count == 0) MouseHook.Drop();
         Closed?.Invoke();
     }
 
@@ -344,4 +352,98 @@ internal static class WindowExtensions
 
     public static IntPtr Handle(this Window window) =>
         new System.Windows.Interop.WindowInteropHelper(window).Handle;
+}
+
+/// <summary>
+/// 低级鼠标钩子：用来实现"点菜单外面就关闭"。
+/// 轮询 GetAsyncKeyState 判断按下不可靠（会把刚弹出的菜单自己关掉，或干脆不关），这里改用系统钩子。
+/// </summary>
+internal static class MouseHook
+{
+    const int WH_MOUSE_LL = 14;
+    const int WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MSLLHOOKSTRUCT
+    {
+        public POINT pt;
+        public uint mouseData;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
+    delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint threadId);
+    [DllImport("user32.dll")]
+    static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")]
+    static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr GetModuleHandle(string? name);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int L, T, R, B; }
+
+    static IntPtr _hook;
+    static HookProc? _proc;   // 必须保住委托，否则会被 GC 回收导致钩子失效
+
+    public static void Ensure()
+    {
+        if (_hook != IntPtr.Zero) return;
+        _proc ??= Callback;
+        _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
+        if (_hook == IntPtr.Zero) Log.Info("PopMenu: the mouse hook was refused; Esc still closes the menu");
+    }
+
+    public static void Drop()
+    {
+        if (_hook == IntPtr.Zero) return;
+        UnhookWindowsHookEx(_hook);
+        _hook = IntPtr.Zero;
+    }
+
+    static IntPtr Callback(int code, IntPtr wParam, IntPtr lParam)
+    {
+        try
+        {
+            if (code >= 0)
+            {
+                int message = (int)wParam;
+                if (message is WM_LBUTTONDOWN or WM_RBUTTONDOWN or WM_MBUTTONDOWN)
+                {
+                    var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                    if (!OverAnyMenu(info.pt))
+                    {
+                        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                        if (dispatcher is not null) dispatcher.BeginInvoke(new Action(PopMenu.CloseAllOpen));
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // 钩子回调里绝不能抛
+        }
+        return CallNextHookEx(_hook, code, wParam, lParam);
+    }
+
+    static bool OverAnyMenu(POINT p)
+    {
+        foreach (var menu in PopMenu.OpenMenus)
+        {
+            var hwnd = menu.WindowHandle;
+            if (hwnd == IntPtr.Zero) continue;
+            if (!GetWindowRect(hwnd, out var r)) continue;
+            if (p.X >= r.L && p.X <= r.R && p.Y >= r.T && p.Y <= r.B) return true;
+        }
+        return false;
+    }
 }
