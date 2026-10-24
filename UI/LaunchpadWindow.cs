@@ -550,13 +550,19 @@ internal sealed class LaunchpadWindow : Window
         else UpdateSelection();
     }
 
-    void Move(int delta) => Select(_selected < 0 ? (delta > 0 ? 0 : _results.Count - 1) : _selected + delta);
+    void Move(int delta) => Select(_selected < 0 ? 0 : _selected + delta);   // 未选中时任何方向键都落在第一格
 
     void TurnPage(int delta)
     {
         if (PageCount <= 1) return;
-        // 翻页时把选中项带到新页的第一格，方向键接着就能用
         int page = Math.Clamp(_page + delta, 0, PageCount - 1);
+        if (_selected < 0)
+        {
+            // 滚轮/PageUp 只翻页，不建立选中：否则每滑一下就点亮第一格。
+            ShowPage(page);
+            return;
+        }
+        // 已经有选中项时，把它带到新页的第一格，方向键接着就能用。
         Select(page * LaunchpadModel.PageSize);
     }
 
