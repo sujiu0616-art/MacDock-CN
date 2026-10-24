@@ -23,6 +23,8 @@ internal sealed class DockWindow : Window
 {
     const double RevealDelayMs = 150;
     const double HideDelayMs = 350;
+    /// <summary>Width of the soft shadow hugging the plate, in device-independent pixels.</summary>
+    const double PlateShadowBand = 7;
 
     readonly DockConfig _config;
     readonly BackdropWindow _backdrop;
@@ -37,6 +39,27 @@ internal sealed class DockWindow : Window
     readonly Dictionary<DockItem, DockItemView> _views = [];
     readonly Canvas _canvas = new();
     readonly Rectangle _hitArea = new() { Fill = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) };
+    // The plate's own edges: DWM gives the glass its blur, nothing in it gives a rim, a sheen or a shadow.
+    readonly Border _plateShadow = new()
+    {
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+        BorderThickness = new Thickness(PlateShadowBand),
+        Effect = new BlurEffect { Radius = 9, RenderingBias = RenderingBias.Performance },
+    };
+    readonly Border _plateRim = new()
+    {
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+        BorderThickness = new Thickness(1),
+    };
+    readonly Rectangle _plateHighlight = new()
+    {
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+        RadiusX = 1,
+        RadiusY = 1,
+    };
     readonly Border _label;
     readonly TextBlock _labelText;
     readonly DockLayout _layout = new();
@@ -47,6 +70,7 @@ internal sealed class DockWindow : Window
     const int TaskbarHotkeyId = 1;
 
     DockMetrics _m;
+    double _plateThickness; // the plate follows the tallest icon while the dock magnifies
     AppBar? _appBar;
     WindowTracker? _tracker;
     TaskbarReplacer? _replacer;
@@ -121,6 +145,7 @@ internal sealed class DockWindow : Window
         _config = config;
         _backdrop = backdrop;
         _m = BuildMetrics();
+        _plateThickness = _m.PlateThickness;
 
         Title = "MacDock";
         WindowStyle = WindowStyle.None;
@@ -143,12 +168,12 @@ internal sealed class DockWindow : Window
         _labelText = new TextBlock
         {
             FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
-            FontSize = 13,
+            FontSize = 12,
         };
         _label = new Border
         {
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 3, 10, 4),
+            Padding = new Thickness(8, 2, 8, 3), // macOS: 8 to the sides, enough above and below for the ascenders
             BorderThickness = new Thickness(1),
             Child = _labelText,
             IsHitTestVisible = false,
@@ -157,7 +182,11 @@ internal sealed class DockWindow : Window
         };
         Panel.SetZIndex(_label, 1000);
 
+        // Under the icons (added first): a magnified icon reaches above the plate and must not be crossed by the rim.
         _canvas.Children.Add(_hitArea);
+        _canvas.Children.Add(_plateShadow);
+        _canvas.Children.Add(_plateRim);
+        _canvas.Children.Add(_plateHighlight);
         _canvas.Children.Add(_label);
         foreach (var itemConfig in config.Items) _pinned.Add(new DockItem(itemConfig));
         foreach (var folderConfig in config.Folders) _folders.Add(new DockItem(folderConfig));
@@ -225,7 +254,11 @@ internal sealed class DockWindow : Window
         _genieTestMessage = RegisterWindowMessage("MacDock.GenieTest");
         _quitMessage = RegisterWindowMessage(CommandLine.QuitMessageName);
 
-        // Hide the Windows taskbar first, so the dock takes the space it leaves.
+        // The menu bar first: its tray service (ManagedShell) has to hook Explorer's notification
+        // area while it is still on screen, otherwise the icons never reach us. Only then take the
+        // taskbar away, so the dock can claim the space it leaves.
+        if (_config.Settings.MenuBar) ShowMenuBar();
+
         _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
         _replacer.Start();
         _taskbarHotkey = Hotkey.Register(_hwnd, TaskbarHotkeyId, _config.Settings.TaskbarHotkey);
@@ -252,7 +285,6 @@ internal sealed class DockWindow : Window
 
         _displayLayout = Displays.Layout();
         Place();
-        if (_config.Settings.MenuBar) ShowMenuBar();
         UpdateFollowTimer();
         if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) LaunchOpenAtStartItems();
     }
@@ -690,6 +722,13 @@ internal sealed class DockWindow : Window
         double dot = _m.DotSize;
         double dotV = _m.EdgeGap + (_m.Pad - dot) / 2 - slide;
 
+        // The plate grows with the tallest icon, as the Dock's does: a magnified icon that pokes out
+        // of the glass is the one thing that never happens on a Mac.
+        double tallest = _m.IconSize;
+        for (int i = 0; i < _entries.Count && i < _layout.Sizes.Length; i++)
+            if (_entries[i].Kind == DockItemKind.App) tallest = Math.Max(tallest, _layout.Sizes[i]);
+        _plateThickness = Math.Max(_m.PlateThickness, 2 * _m.Pad + tallest);
+
         for (int i = 0; i < _entries.Count; i++)
         {
             var item = _entries[i];
@@ -697,10 +736,10 @@ internal sealed class DockWindow : Window
             var view = _views[item];
             if (item.Kind == DockItemKind.Separator)
             {
-                // A crisp one-pixel line across most of the plate height.
+                // A crisp one-pixel line across 60% of the plate height, as between the pinned and the running apps.
                 double x = Math.Round((start + size / 2) * _scale) / _scale;
-                double inset = _m.Pad * 0.4;
-                view.Arrange(ToWindow(x, _m.EdgeGap + inset - slide, 1 / _scale, _m.PlateThickness - 2 * inset),
+                double inset = _plateThickness * 0.2;
+                view.Arrange(ToWindow(x, _m.EdgeGap + inset - slide, 1 / _scale, _plateThickness - 2 * inset),
                     Rect.Empty, item.Presence);
                 continue;
             }
@@ -727,18 +766,80 @@ internal sealed class DockWindow : Window
     void UpdatePlate(double slide)
     {
         double v0 = Math.Max(0, _m.EdgeGap - slide);
-        double v1 = _m.EdgeGap + _m.PlateThickness - slide;
+        double v1 = _m.EdgeGap + _plateThickness - slide;
         bool visible = !_fullscreen && v1 - v0 > 0.5;
         if (visible)
         {
             var r = ToWindow(_layout.PlateStart, v0, _layout.PlateEnd - _layout.PlateStart, v1 - v0);
+            _backdrop.SetGlassRadius((int)Math.Round(_m.PlateRadius * _scale));
             _backdrop.SetBounds(new RECT(
                 _windowPx.Left + (int)Math.Round(r.Left * _scale),
                 _windowPx.Top + (int)Math.Round(r.Top * _scale),
                 _windowPx.Left + (int)Math.Round(r.Right * _scale),
                 _windowPx.Top + (int)Math.Round(r.Bottom * _scale)));
+            PlacePlateEdges(r);
+        }
+        else
+        {
+            PlacePlateEdges(Rect.Empty);
         }
         _backdrop.SetVisible(visible);
+    }
+
+    /// <summary>
+    /// The three things the glass cannot draw itself: a 1px rim (which also hides the stepped edge of
+    /// its window region), the sheen along the side facing away from the screen edge, and a soft
+    /// shadow. An empty rect hides them, while the dock slides away or a full-screen app is in front.
+    /// </summary>
+    void PlacePlateEdges(Rect plate)
+    {
+        bool shown = plate.Width > 0.5 && plate.Height > 0.5;
+        var visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        _plateRim.Visibility = _plateShadow.Visibility = _plateHighlight.Visibility = visibility;
+        if (!shown) return;
+
+        // Snapped to whole screen pixels: a hairline that falls between two pixels is drawn as two grey ones.
+        double Snap(double v) => Math.Round(v * _scale) / _scale;
+        var rim = new Rect(Snap(plate.Left), Snap(plate.Top), Math.Max(0, Snap(plate.Right) - Snap(plate.Left)),
+            Math.Max(0, Snap(plate.Bottom) - Snap(plate.Top)));
+        double radius = _m.PlateRadius;
+
+        _plateRim.CornerRadius = new CornerRadius(radius);
+        _plateRim.Width = rim.Width;
+        _plateRim.Height = rim.Height;
+        Canvas.SetLeft(_plateRim, rim.Left);
+        Canvas.SetTop(_plateRim, rim.Top);
+
+        // The border stroke sits inside the element, so the shadow widens the element by its own band and strokes that.
+        _plateShadow.CornerRadius = new CornerRadius(radius + PlateShadowBand);
+        _plateShadow.Width = rim.Width + 2 * PlateShadowBand;
+        _plateShadow.Height = rim.Height + 2 * PlateShadowBand;
+        Canvas.SetLeft(_plateShadow, rim.Left - PlateShadowBand);
+        Canvas.SetTop(_plateShadow, rim.Top - PlateShadowBand);
+
+        // The sheen runs along the plate's outer edge, clear of the corners: light comes from above.
+        double along = radius * 0.75;
+        switch (Edge)
+        {
+            case DockEdge.Left:
+                _plateHighlight.Width = 1;
+                _plateHighlight.Height = Math.Max(0, rim.Height - 2 * along);
+                Canvas.SetLeft(_plateHighlight, rim.Right - 1.5);
+                Canvas.SetTop(_plateHighlight, rim.Top + along);
+                break;
+            case DockEdge.Right:
+                _plateHighlight.Width = 1;
+                _plateHighlight.Height = Math.Max(0, rim.Height - 2 * along);
+                Canvas.SetLeft(_plateHighlight, rim.Left + 0.5);
+                Canvas.SetTop(_plateHighlight, rim.Top + along);
+                break;
+            default:
+                _plateHighlight.Width = Math.Max(0, rim.Width - 2 * along);
+                _plateHighlight.Height = 1;
+                Canvas.SetLeft(_plateHighlight, rim.Left + along);
+                Canvas.SetTop(_plateHighlight, rim.Top + 1);
+                break;
+        }
     }
 
     void UpdateHitZone()
@@ -750,7 +851,7 @@ internal sealed class DockWindow : Window
         }
         else
         {
-            double top = _m.EdgeGap + _m.PlateThickness;
+            double top = _m.EdgeGap + _plateThickness;
             if (_hovered || _magnify > 0.001)
             {
                 double tallest = _layout.Sizes.Length > 0 ? _layout.Sizes.Max() : _m.IconSize;
@@ -1249,6 +1350,13 @@ internal sealed class DockWindow : Window
     {
         if (item.IsStart)
         {
+            // 左键 = 启动台（macOS 的 Launchpad）；Shift+左键仍回 Windows 开始菜单，
+            // 有些场景（固定到开始屏幕、设置入口）还是系统菜单更顺手。
+            if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+            {
+                LaunchpadWindow.Open();
+                return;
+            }
             // Start may already have closed itself on the press; toggling then would reopen it.
             if (!_startOpenAtPress || StartMenu.IsOpen(GetForegroundWindow())) StartMenu.Toggle();
             return;
@@ -1280,7 +1388,7 @@ internal sealed class DockWindow : Window
     {
         if (item.IsStart)
         {
-            StartMenu.Toggle();
+            LaunchpadWindow.Open();
             return;
         }
         if (string.IsNullOrEmpty(item.Target)) return;
@@ -1948,9 +2056,14 @@ internal sealed class DockWindow : Window
     void ApplyTheme()
     {
         bool dark = Theme.IsDark;
-        _label.Background = new SolidColorBrush(dark ? Color.FromArgb(0xEB, 0x2B, 0x2B, 0x2D) : Color.FromArgb(0xF2, 0xEE, 0xEE, 0xEE));
-        _label.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
+        // Hover bubble: near-black glass with white text in the dark, clean white with black text in the light.
+        _label.Background = new SolidColorBrush(dark ? Color.FromArgb(0xE6, 0x10, 0x10, 0x14) : Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF));
+        _label.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
         _labelText.Foreground = new SolidColorBrush(dark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1D, 0x1D, 0x1F));
+        // The plate: white 12% rim in the dark, black 22% rim in the light (the glass is bright there).
+        _plateRim.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x38, 0x00, 0x00, 0x00));
+        _plateHighlight.Fill = new SolidColorBrush(dark ? Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
+        _plateShadow.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x45, 0x00, 0x00, 0x00) : Color.FromArgb(0x1A, 0x00, 0x00, 0x00));
         foreach (var view in _views.Values) view.Refresh();
         _backdrop.ApplyTheme();
         _menuBars?.ApplyTheme();

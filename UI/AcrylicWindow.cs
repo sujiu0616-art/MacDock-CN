@@ -44,6 +44,11 @@ internal abstract class AcrylicWindow : Window
 
     RECT _bounds;
 
+    // Corner shaping: DWM only knows its own fixed radius (ROUND / ROUNDSMALL), while the Dock's plate
+    // needs one that follows its height. So the glass is cut to a window region instead.
+    int _radiusPx;
+    int _regionWidth = -1, _regionHeight = -1, _regionRadius = -1;
+
     /// <summary>Moves the glass, in physical screen pixels.</summary>
     public void SetBounds(RECT r)
     {
@@ -51,6 +56,110 @@ internal abstract class AcrylicWindow : Window
         _bounds = r;
         SetWindowPos(Handle, IntPtr.Zero, r.Left, r.Top, Math.Max(1, r.Width), Math.Max(1, r.Height),
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        ApplyRegion();
+    }
+
+    /// <summary>Corner radius of the glass in physical pixels; 0 leaves the window square.</summary>
+    public void SetGlassRadius(int pixels)
+    {
+        pixels = Math.Max(0, pixels);
+        if (pixels == _radiusPx) return;
+        _radiusPx = pixels;
+        ApplyRegion();
+    }
+
+    /// <summary>
+    /// Cuts the window to its rounded outline. A window region is not antialiased, so the caller
+    /// draws a 1px rim over its edge, which hides the steps.
+    /// </summary>
+    void ApplyRegion()
+    {
+        if (Handle == IntPtr.Zero) return;
+        int w = Math.Max(1, _bounds.Width), h = Math.Max(1, _bounds.Height);
+        if (w == _regionWidth && h == _regionHeight && _radiusPx == _regionRadius) return;
+        _regionWidth = w;
+        _regionHeight = h;
+        _regionRadius = _radiusPx;
+
+        IntPtr region = _radiusPx > 0
+            ? GlassInterop.CreateRoundRectRgn(0, 0, w + 1, h + 1, _radiusPx * 2, _radiusPx * 2)
+            : IntPtr.Zero;
+        if (GlassInterop.SetWindowRgn(Handle, region, true) != 0) return; // the system owns the region from now on
+        if (region != IntPtr.Zero) GlassInterop.DeleteObject(region);
+        _regionRadius = -1; // not applied: try again next time, the glass stays rectangular meanwhile
+        Log.Info("Glass region refused, keeping square corners");
+    }
+
+    /// <summary>
+    /// Real backdrop blur for a window that is not rectangular: DWM drops its system backdrop as soon
+    /// as a window region is set (the corners then show the desktop sharp through the tint), while the
+    /// older accent policy keeps blurring whatever shape the region has.
+    /// </summary>
+    protected void UseAccentBlur()
+    {
+        if (Handle == IntPtr.Zero) return;
+        int none = DWMSBT_NONE;
+        DwmSetWindowAttribute(Handle, DWMWA_SYSTEMBACKDROP_TYPE, ref none, sizeof(int));
+
+        var policy = new AccentPolicy
+        {
+            AccentState = ACCENT_ENABLE_BLURBEHIND,
+            AccentFlags = 0,
+            GradientColor = 0, // no tint from the compositor: the plate's tint is a WPF brush
+        };
+        int size = Marshal.SizeOf<AccentPolicy>();
+        IntPtr buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(policy, buffer, false);
+            var data = new WindowCompositionAttributeData { Attribute = WCA_ACCENT_POLICY, Data = buffer, SizeOfData = size };
+            if (GlassInterop.SetWindowCompositionAttribute(Handle, ref data) == 0)
+                Log.Info("Glass: the accent blur was refused, the plate stays see-through");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /// <summary>
+    /// Interop declared here rather than in <c>Interop/NativeMethods.cs</c>, which this part of the
+    /// shell does not own; both calls only concern the glass windows of this file.
+    /// </summary>
+    static class GlassInterop
+    {
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int width, int height);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        public static extern bool DeleteObject(IntPtr obj);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
+
+        [DllImport("user32.dll")]
+        public static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+    }
+
+    const int WCA_ACCENT_POLICY = 19;
+    const int ACCENT_ENABLE_BLURBEHIND = 3;
+    const int DWMSBT_NONE = 1;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct AccentPolicy
+    {
+        public int AccentState;
+        public int AccentFlags;
+        public uint GradientColor;
+        public int AnimationId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct WindowCompositionAttributeData
+    {
+        public int Attribute;
+        public IntPtr Data;
+        public int SizeOfData;
     }
 
     /// <summary>After sleep, unlock or a display change DWM may draw the glass as inactive (a flat colour).</summary>

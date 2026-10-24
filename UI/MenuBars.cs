@@ -109,15 +109,53 @@ internal sealed class MenuBars : IDisposable
     {
         var now = DateTime.Now;
         var culture = CultureInfo.CurrentCulture;
-        var day = now.ToString("ddd", culture);
-        if (day.Length > 0) day = char.ToUpper(day[0], culture) + day[1..];
-        ClockText = $"{day} {now.ToString("d MMM", culture)}   {now.ToString("t", culture)}";
+        ClockText = MacClock(now, culture);
         ClockTip = now.ToString("D", culture);
         foreach (var bar in _bars) bar.ShowClock(ClockText, ClockTip);
         // Next tick right after the minute turns.
         _clockTimer.Stop();
         _clockTimer.Interval = TimeSpan.FromSeconds(60 - now.Second) - TimeSpan.FromMilliseconds(now.Millisecond - 20);
         _clockTimer.Start();
+    }
+
+    /// <summary>
+    /// The clock as macOS draws it: "10月25日 周日 05:10" in Chinese, "Sun 25 Oct 05:10" elsewhere.
+    /// 12 or 24 hour follows the Windows setting, like the taskbar does.
+    /// </summary>
+    static string MacClock(DateTime now, CultureInfo culture)
+    {
+        string time = now.ToString(Uses24HourClock(culture) ? "HH:mm" : "h:mm", culture);
+        if (!Uses24HourClock(culture))
+        {
+            // 上午/下午 goes before the time in Chinese and after it in English: the culture's own
+            // short time pattern knows which, so follow it instead of hard-coding the order.
+            string meridiem = now.ToString("tt", culture);
+            time = culture.DateTimeFormat.ShortTimePattern.StartsWith('t') ? meridiem + time : time + " " + meridiem;
+        }
+        if (culture.TwoLetterISOLanguageName == "zh")
+            return $"{now:MM月dd日} {now.ToString("ddd", culture)} {time}";
+
+        string day = now.ToString("ddd", culture);
+        if (day.Length > 0) day = char.ToUpper(day[0], culture) + day[1..];
+        return $"{day} {now.ToString("d MMM", culture)} {time}";
+    }
+
+    /// <summary>
+    /// Windows lets the user pick 12- or 24-hour time independently of the language and the taskbar
+    /// honours that setting: read the same value, and fall back to the culture's own pattern.
+    /// </summary>
+    static bool Uses24HourClock(CultureInfo culture)
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Control Panel\International");
+            if (key?.GetValue("iTime") is string iTime && iTime.Length > 0) return iTime != "0";
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reading the clock format");
+        }
+        return culture.DateTimeFormat.ShortTimePattern.Contains('H');
     }
 
     public void Dispose()

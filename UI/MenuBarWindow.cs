@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -6,6 +7,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using MacDock.Core;
 using MacDock.Interop;
+using Microsoft.Win32;
 using static MacDock.Interop.NativeMethods;
 
 namespace MacDock.UI;
@@ -67,7 +69,7 @@ internal sealed class MenuBarWindow : Window
         _glass.Show();
         new WindowInteropHelper(this).Owner = _glass.Handle;
 
-        _logo = Clickable(WindowsLogo(), 10);
+        _logo = Clickable(WindowsLogo(), 9);
         _logo.MouseLeftButtonDown += (_, _) => _startOpenAtPress = StartMenu.IsOpen(GetForegroundWindow());
         _logo.MouseLeftButtonUp += (_, _) =>
         {
@@ -76,8 +78,8 @@ internal sealed class MenuBarWindow : Window
         };
         _logo.MouseRightButtonUp += (_, _) => StartMenu.ShowQuickLinkMenu();
 
-        _appName = Text("", 13, FontWeights.Bold);
-        _appName.Margin = new Thickness(6, 0, 0, 0);
+        _appName = Text("", 13, FontWeights.SemiBold); // macOS 用半粗：13 Bold 在 150% 缩放下会糊成一团
+        _appName.Margin = new Thickness(4, 0, 0, 0);
         _appName.VerticalAlignment = VerticalAlignment.Center;
 
         // One tray service per session: it lives in the primary monitor's bar.
@@ -86,18 +88,17 @@ internal sealed class MenuBarWindow : Window
         _wifiBack = Glyph("");
         _wifiBack.Opacity = 0.3;
         _wifi = Glyph("");
-        var wifiCell = new Grid { Margin = new Thickness(0, 0, 10, 0) };
+        var wifiCell = new Grid { Margin = new Thickness(0, 0, 6, 0) };
         wifiCell.Children.Add(_wifiBack);
         wifiCell.Children.Add(_wifi);
         _volume = Glyph("");
-        _volume.Margin = new Thickness(0, 0, 10, 0);
+        _volume.Margin = new Thickness(0, 0, 6, 0);
         _battery = Glyph("");
-        _battery.FontSize = 16;
         var statusRow = new StackPanel { Orientation = Orientation.Horizontal };
         statusRow.Children.Add(wifiCell);
         statusRow.Children.Add(_volume);
         statusRow.Children.Add(_battery);
-        _status = Clickable(statusRow, 8);
+        _status = Clickable(statusRow, 6);
         _status.MouseLeftButtonUp += (_, _) => ShellFlyouts.QuickSettings();
 
         _clockText = Text("", 13, FontWeights.Normal);
@@ -105,14 +106,14 @@ internal sealed class MenuBarWindow : Window
         _clock = Clickable(_clockText, 8);
         _clock.MouseLeftButtonUp += (_, _) => ShellFlyouts.NotificationCenter();
 
-        var left = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+        var left = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0) };
         left.Children.Add(_logo);
         left.Children.Add(_appName);
         var right = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 0, 8, 0),
+            Margin = new Thickness(0, 0, 6, 0),
         };
         if (_tray is not null) right.Children.Add(_tray);
         right.Children.Add(_status);
@@ -276,10 +277,15 @@ internal sealed class MenuBarWindow : Window
 
     public void ShowAppName(string name) => _appName.Text = name;
 
+    /// <summary>
+    /// Shows the date and time. <see cref="MenuBars"/> owns when the clock ticks and words the
+    /// tooltip, but the layout of the string on screen belongs to the bar (localized, as on macOS),
+    /// so the moment is formatted again here rather than parsed back out of the owner's text.
+    /// </summary>
     public void ShowClock(string text, string tip)
     {
         _clockText.Text = text;
-        _clock.ToolTip = tip;
+        _clock.ToolTip = string.IsNullOrEmpty(tip) ? text : tip;
     }
 
     public void ShowStatus(SystemStatus s)
@@ -337,7 +343,7 @@ internal sealed class MenuBarWindow : Window
 
     TextBlock Glyph(string glyph)
     {
-        var t = Text(glyph, 14, FontWeights.Normal);
+        var t = Text(glyph, 16, FontWeights.Normal); // macOS menu extras are 16 DIU
         t.FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
         t.VerticalAlignment = VerticalAlignment.Center;
         return t;
@@ -399,9 +405,10 @@ internal sealed class MenuBarGlass : AcrylicWindow
     public override void ApplyTheme()
     {
         ApplyGlassTheme(DWMWA_COLOR_NONE);
+        // macOS dark: a deep neutral charcoal over the acrylic; light: white, dense enough for the icons.
         _tint.Background = new SolidColorBrush(Theme.IsDark
-            ? Color.FromArgb(0x33, 0x10, 0x10, 0x10)
-            : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
+            ? Color.FromArgb(0xA6, 0x24, 0x26, 0x28) // 65%
+            : Color.FromArgb(0xB8, 0xFF, 0xFF, 0xFF)); // 72%
     }
 
     public void SetVisible(bool visible)

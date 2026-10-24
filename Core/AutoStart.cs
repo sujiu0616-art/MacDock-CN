@@ -17,7 +17,35 @@ internal static class AutoStart
     const string TaskName = "MacDock";
 
     static string Exe => Environment.ProcessPath!;
-    static string Command => $"\"{Exe}\" {AutoStartArg}";
+
+    /// <summary>
+    /// The silent launcher written next to the app folder by tools\install.ps1: it points
+    /// DOTNET_ROOT at the .NET 9 runtime and then starts the app. The shipped build is framework
+    /// dependent (a self-contained one breaks the tray service), so the pointer given to Windows has
+    /// to go through the launcher, not straight to the exe.
+    /// </summary>
+    static string? Launcher
+    {
+        get
+        {
+            try
+            {
+                var folder = Path.GetDirectoryName(Path.GetDirectoryName(Exe));
+                if (folder is null) return null;
+                var launcher = Path.Combine(folder, "MacDock.vbs");
+                return File.Exists(launcher) ? launcher : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>The command Windows runs at sign-in: the launcher when it exists, else this exe.</summary>
+    static string Command => Launcher is { } launcher
+        ? $"\"{Path.Combine(Environment.SystemDirectory, "wscript.exe")}\" \"{launcher}\" {AutoStartArg}"
+        : $"\"{Exe}\" {AutoStartArg}";
 
     public static bool IsEnabled
     {

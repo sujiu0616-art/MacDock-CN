@@ -7,10 +7,10 @@ internal enum DockEdge { Bottom, Left, Right }
 
 internal sealed class DockSettings
 {
-    /// <summary>Resting icon size, in device-independent pixels.</summary>
-    public double IconSize { get; set; } = 48;
+    /// <summary>Resting icon size, in device-independent pixels (56 = the Dock of macOS Tahoe).</summary>
+    public double IconSize { get; set; } = 56;
     public bool Magnification { get; set; } = true;
-    public double MagnifiedSize { get; set; } = 80;
+    public double MagnifiedSize { get; set; } = 96;
     public bool AutoHide { get; set; }
     public DockEdge Edge { get; set; } = DockEdge.Bottom;
 

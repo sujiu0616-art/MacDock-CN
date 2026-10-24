@@ -14,14 +14,19 @@ internal sealed class DockMetrics(double iconSize, double maxSize, DockEdge edge
     /// <summary>Gap between the screen edge and the dock plate.</summary>
     public double EdgeGap => Math.Round(IconSize * 0.09);
     /// <summary>Plate padding around the icons.</summary>
-    public double Pad => Math.Round(IconSize * 0.15);
+    public double Pad => Math.Round(IconSize * 0.16);
     /// <summary>Space between two resting icons.</summary>
-    public double Gap => IconSize * 0.06;
-    /// <summary>Width of the separator slot between pinned and running apps.</summary>
-    public double SeparatorWidth => Math.Round(IconSize * 0.22);
+    public double Gap => IconSize * 0.075;
+    /// <summary>Width of the separator slot between pinned and running apps (the line sits in its middle).</summary>
+    public double SeparatorWidth => Math.Round(IconSize * 0.28);
     /// <summary>How far from the pointer icons are still magnified.</summary>
     public double Range => IconSize * 3.2;
     public double PlateThickness => IconSize + 2 * Pad;
+    /// <summary>
+    /// Corner radius of the plate: a share of its height (the Dock grows rounder with bigger icons),
+    /// within the range macOS stays in so the plate never looks like a pill or a rectangle.
+    /// </summary>
+    public double PlateRadius => Math.Clamp(PlateThickness * 0.26, 14, 30);
     public double DotSize => Math.Max(3, Math.Round(IconSize * 0.085));
     /// <summary>Highest an icon can reach: magnified, or resting and bouncing.</summary>
     public double TallestIcon => Math.Max(MaxSize, IconSize * 1.7);

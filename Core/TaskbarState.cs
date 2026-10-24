@@ -106,7 +106,7 @@ internal static class TaskbarState
         if (tray == IntPtr.Zero) return;
         // Someone (the user, Settings, a guard that saw a stale owner) turned auto-hide off.
         if ((GetState(tray) & ABS_AUTOHIDE) == 0) Hide();
-        else HideWindows(tray);
+        else HideWindows(tray); // covers a taskbar Explorer re-created elsewhere
     }
 
     /// <summary>
@@ -132,7 +132,7 @@ internal static class TaskbarState
                 SetState(tray, marker.OriginalState);
                 PersistAutoHide((marker.OriginalState & ABS_AUTOHIDE) != 0);
             }
-            foreach (var h in TaskbarWindows(tray)) ShowWindow(h, SW_SHOWNA);
+            foreach (var h in ExplorerTaskbarWindows()) ShowWindow(h, SW_SHOWNA);
             DeleteMarker();
             AutoStart.SetRestoreFallback(false);
             Log.Info($"Taskbar restored (state {marker?.OriginalState.ToString() ?? "unchanged"}, process {Environment.ProcessId})");
@@ -195,8 +195,27 @@ internal static class TaskbarState
 
     static void HideWindows(IntPtr tray)
     {
-        foreach (var h in TaskbarWindows(tray))
+        // Not just `tray`: an Explorer restart can leave a stale hidden Shell_TrayWnd behind next to
+        // the live one, and the cached handle may point at either.
+        foreach (var h in ExplorerTaskbarWindows())
             if (IsWindowVisible(h)) ShowWindow(h, SW_HIDE);
+    }
+
+    /// <summary>Every taskbar window Explorer owns right now (primary and per-monitor), fresh each call.</summary>
+    static List<IntPtr> ExplorerTaskbarWindows()
+    {
+        var result = new List<IntPtr>();
+        foreach (var className in new[] { PrimaryClass, SecondaryClass })
+        {
+            var hwnd = IntPtr.Zero;
+            while ((hwnd = FindWindowEx(IntPtr.Zero, hwnd, className, null)) != IntPtr.Zero)
+            {
+                GetWindowThreadProcessId(hwnd, out uint pid);
+                if (pid == Environment.ProcessId) continue; // the menu bar's tray service
+                if (IsExplorer(pid)) result.Add(hwnd);
+            }
+        }
+        return result;
     }
 
     /// <summary>The primary taskbar and one per extra monitor.</summary>

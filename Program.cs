@@ -24,6 +24,9 @@ internal static class Program
             case AutoStart.FallbackArg:
                 TaskbarState.RestoreIfOrphaned();
                 return 0;
+            case "--launchpad":
+                // 自测与验收入口：只开启动台，不接管任务栏、不建 Dock。
+                return LaunchpadWindow.RunStandalone();
         }
         if (CommandLine.Run(args) is int code) return code;
         return RunDock();

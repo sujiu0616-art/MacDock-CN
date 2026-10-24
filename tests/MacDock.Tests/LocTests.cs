@@ -62,8 +62,8 @@ public class LocTests
     }
 
     [Fact]
-    public void The_language_setting_offers_system_English_and_Italian()
+    public void The_language_setting_offers_system_Chinese_English_and_Italian()
     {
-        Assert.Equal(["", "en", "it"], Loc.Languages);
+        Assert.Equal(["", "zh-CN", "en", "it"], Loc.Languages);
     }
 }

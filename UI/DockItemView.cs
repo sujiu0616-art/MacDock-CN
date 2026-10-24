@@ -84,10 +84,11 @@ internal sealed class DockItemView
     }
 
     // Refresh runs for every icon whenever a window opens, closes or comes to the front: no new brushes each time.
-    static readonly Brush LineDark = Frozen(Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
-    static readonly Brush LineLight = Frozen(Color.FromArgb(0x38, 0x00, 0x00, 0x00));
-    static readonly Brush DotDark = Frozen(Color.FromArgb(0xE0, 0xF2, 0xF2, 0xF2));
-    static readonly Brush DotLight = Frozen(Color.FromArgb(0xB8, 0x1E, 0x1E, 0x1E));
+    static readonly Brush LineDark = Frozen(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
+    static readonly Brush LineLight = Frozen(Color.FromArgb(0x3D, 0x00, 0x00, 0x00));
+    // Running dot: white 55% on the dark glass, black 45% on the light one, never outlined.
+    static readonly Brush DotDark = Frozen(Color.FromArgb(0x8C, 0xFF, 0xFF, 0xFF));
+    static readonly Brush DotLight = Frozen(Color.FromArgb(0x73, 0x00, 0x00, 0x00));
 
     static Brush Frozen(Color c)
     {
