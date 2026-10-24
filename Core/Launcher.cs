@@ -120,27 +120,79 @@ internal static class Launcher
                 if (!string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
             }
             var started = Process.Start(psi);
-            if (started is not null)
-            {
-                // 有些客户端（Electron 那类）会在启动后立刻自己退出：留一条记录，便于区分是谁的问题。
-                var name = item.Name;
-                _ = System.Threading.Tasks.Task.Run(async () =>
-                {
-                    try
-                    {
-                        var deadline = DateTime.Now.AddSeconds(3);
-                        await started.WaitForExitAsync().ConfigureAwait(false);
-                        if (started.ExitCode == 0 && DateTime.Now <= deadline)
-                            Log.Info($"{name}: exited by itself right after start (exit 0)");
-                    }
-                    catch (Exception) { }
-                    finally { started.Dispose(); }
-                });
-            }
+            if (started is not null) AfterLaunch(item, target, started);
         }
         catch (Exception ex)
         {
             Log.Error(ex, $"Launching {item.Name}");
         }
     }
+
+    /// <summary>
+    /// 启动之后收尾：有些客户端（bilibili）直接起 exe 会立刻 exit 0，要求经自己的
+    /// resources\elevate.exe 拉起；起来之后主窗口又是隐藏的，要 SC_RESTORE 才显示。
+    /// </summary>
+    static void AfterLaunch(DockItem item, string target, System.Diagnostics.Process started)
+    {
+        string dir = Path.GetDirectoryName(target) ?? "";
+        string name = item.Name;
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(1500).ConfigureAwait(false);
+                bool died = false;
+                try { died = started.HasExited; } catch (Exception) { }
+                if (died && TryElevationHelper(target, dir))
+                {
+                    Log.Info($"{name}: started directly then exited; relaunched through the app's own elevate helper");
+                    await Task.Delay(2500).ConfigureAwait(false);
+                }
+
+                // 把它藏起来（或最小化）的主窗口叫回来
+                if (!WindowActions.SurfaceHiddenWindows(target))
+                {
+                    try
+                    {
+                        if (started.HasExited && started.ExitCode == 0)
+                            Log.Info($"{name}: exited by itself right after start (exit 0)");
+                    }
+                    catch (Exception) { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, $"Finishing the launch of {name}");
+            }
+            finally
+            {
+                try { started.Dispose(); } catch (Exception) { }
+            }
+        });
+    }
+
+    /// <summary>目录里有 resources\elevate.exe 就用它拉起目标（bilibili 这类客户端要求这样做）。</summary>
+    static bool TryElevationHelper(string target, string dir)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(dir)) return false;
+            string helper = Path.Combine(dir, "resources", "elevate.exe");
+            if (!File.Exists(helper)) return false;
+            var psi = new ProcessStartInfo(helper)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = dir,
+                Arguments = "\"" + target + "\"",
+            };
+            Process.Start(psi)?.Dispose();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Launching through the app's own elevate helper");
+            return false;
+        }
+    }
+
 }
