@@ -621,6 +621,9 @@ internal sealed class DockWindow : Window
     {
         if (_hwnd == IntPtr.Zero || _length <= 0) return;
 
+        // 图标元素按"放大到最大"的尺寸固定，动画只改变换矩阵（否则每帧都要重新 Measure 位图）。
+        foreach (var view in _views.Values) view.SetIconBase(_m.MaxSize);
+
         _slots.Clear();
         foreach (var item in _entries) _slots.Add(new DockSlot(item.Kind == DockItemKind.App, item.Presence));
         _layout.Compute(_m, _slots, _length, _pointer, _magnify);

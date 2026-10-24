@@ -13,6 +13,9 @@ namespace MacDock.UI;
 internal sealed class DockItemView
 {
     readonly Image? _image;
+    readonly ScaleTransform _iconScale = new(1, 1);
+    readonly ScaleTransform _shadeScale = new(1, 1);
+    double _iconBase;   // 图标元素的固定边长（放大到最大时的大小）
     readonly Rectangle? _shade;
     readonly Ellipse? _dot;
     readonly Rectangle? _line;
@@ -27,7 +30,14 @@ internal sealed class DockItemView
             return;
         }
 
-        _image = new Image { Source = item.Icon, Stretch = Stretch.Uniform, IsHitTestVisible = false };
+        _image = new Image
+        {
+            Source = item.Icon,
+            Stretch = Stretch.Uniform,
+            IsHitTestVisible = false,
+            RenderTransformOrigin = new Point(0, 0),
+            RenderTransform = _iconScale,
+        };
         RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.HighQuality);
 
         // Darkens only the icon's own pixels while pressed, like the Dock.
@@ -38,6 +48,8 @@ internal sealed class DockItemView
             Visibility = Visibility.Collapsed,
             IsHitTestVisible = false,
         };
+        _shade.RenderTransformOrigin = new Point(0, 0);
+        _shade.RenderTransform = _shadeScale;
         if (item.Icon is not null) _shade.OpacityMask = new ImageBrush(item.Icon) { Stretch = Stretch.Uniform };
 
         _dot = new Ellipse { IsHitTestVisible = false };
@@ -45,6 +57,18 @@ internal sealed class DockItemView
     }
 
     public DockItem Item { get; }
+
+    /// <summary>图标元素的固定边长：放大动画只改 ScaleTransform，不再每帧改 Width/Height。</summary>
+    public void SetIconBase(double size)
+    {
+        if (_image is null || size <= 0) return;
+        if (Math.Abs(size - _iconBase) < 0.01) return;
+        _iconBase = size;
+        _image.Width = size;
+        _image.Height = size;
+        _shade!.Width = size;
+        _shade.Height = size;
+    }
 
     public void AddTo(Panel panel)
     {
@@ -65,8 +89,8 @@ internal sealed class DockItemView
             _line.Opacity = opacity;
             return;
         }
-        Place(_image!, main);
-        Place(_shade!, main);
+        PlaceScaled(_image!, _iconScale, main);
+        PlaceScaled(_shade!, _shadeScale, main);
         Place(_dot!, dot);
         _image!.Opacity = opacity;
         _dot!.Opacity = opacity;
@@ -123,6 +147,16 @@ internal sealed class DockItemView
         yield return _image!;
         yield return _shade!;
         yield return _dot!;
+    }
+
+    /// <summary>左上角对齐 + 等比缩放：只写合成属性，不触发布局。</summary>
+    void PlaceScaled(FrameworkElement e, ScaleTransform scale, Rect r)
+    {
+        Canvas.SetLeft(e, r.X);
+        Canvas.SetTop(e, r.Y);
+        double s = _iconBase > 0 ? Math.Max(0, r.Width) / _iconBase : 1;
+        scale.ScaleX = s;
+        scale.ScaleY = s;
     }
 
     static void Place(FrameworkElement e, Rect r)
