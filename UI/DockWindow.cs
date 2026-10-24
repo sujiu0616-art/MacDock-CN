@@ -111,6 +111,9 @@ internal sealed class DockWindow : Window
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
     readonly DispatcherTimer _shellGuard = new();
+
+    /// <summary>空闲时把工作集交还系统的计时器（见 Core/Memory.cs）。</summary>
+    readonly DispatcherTimer _idleTrim = new();
     int _edgeDwell;
 
     // Sleep, lock, screen off: why the dock is paused (it runs again when none is left)
@@ -230,12 +233,24 @@ internal sealed class DockWindow : Window
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
+        // 启动把图标都解完之后做一次紧凑 GC + trim
+        Dispatcher.BeginInvoke(new Action(() => Core.Memory.Compact()),
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         if (Environment.GetCommandLineArgs().Contains("--menu"))
             Dispatcher.BeginInvoke(new Action(PreviewMenuForDiagnostics), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
 
         _followTimer.Tick += (_, _) => FollowPointer();
         _shellGuard.Interval = TimeSpan.FromSeconds(5);
         _shellGuard.Tick += (_, _) => EnsureShellVisible();
+
+        // 空闲 trim：20 秒没动画、没菜单、启动台没开，就把工作集交还系统
+        _idleTrim.Interval = TimeSpan.FromSeconds(20);
+        _idleTrim.Tick += (_, _) =>
+        {
+            if (_animating || _menuOpen || _launchpadOpen || _dragging) return;
+            Core.Memory.Trim();
+        };
+        _idleTrim.Start();
         _settleTimer.Tick += (_, _) =>
         {
             // Monitors and Explorer settle a few seconds after waking up: look once more.

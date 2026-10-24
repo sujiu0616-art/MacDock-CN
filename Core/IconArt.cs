@@ -13,7 +13,8 @@ namespace MacDock.Core;
 internal static class IconArt
 {
     /// <summary>统一圆角：把任意图标裁成圆角方块；失败就原样返回，绝不因为美术处理丢了图标。</summary>
-    public static ImageSource? Squircle(ImageSource? icon, int size = 256)
+    // 176 足够：Dock 图标放大到最大也只有 76 DIU（150% 下 114px），256 是 2.2 倍过采样、每张多占 150KB。
+    public static ImageSource? Squircle(ImageSource? icon, int size = 176)
     {
         if (icon is null) return null;
         try
