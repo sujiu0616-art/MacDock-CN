@@ -28,6 +28,8 @@ internal sealed class DockWindow : Window
 
     readonly DockConfig _config;
     readonly BackdropWindow _backdrop;
+    const int SC_MINIMIZE = 0xF020;
+    const int SIZE_MINIMIZED = 1;
 
     /// <summary>The launchpad covers the screen: the dock (and its plate) stay out of the way.</summary>
     bool _launchpadOpen;
@@ -105,6 +107,9 @@ internal sealed class DockWindow : Window
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromMilliseconds(400) };
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
+
+    /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
+    readonly DispatcherTimer _shellGuard = new();
     int _edgeDwell;
 
     // Sleep, lock, screen off: why the dock is paused (it runs again when none is left)
@@ -220,6 +225,8 @@ internal sealed class DockWindow : Window
             CheckDisplays();
         };
         _followTimer.Tick += (_, _) => FollowPointer();
+        _shellGuard.Interval = TimeSpan.FromSeconds(2);
+        _shellGuard.Tick += (_, _) => EnsureShellVisible();
         _settleTimer.Tick += (_, _) =>
         {
             // Monitors and Explorer settle a few seconds after waking up: look once more.
@@ -398,6 +405,31 @@ internal sealed class DockWindow : Window
 
     /// <summary>The monitor the dock is on: the one chosen (or reached by the pointer), else the primary.</summary>
     Display CurrentDisplay() => Displays.ByNameOrPrimary(_displayName);
+
+    /// <summary>
+    /// Win+D（显示桌面）会去最小化所有顶层窗口；Explorer 重启或别的外壳程序也可能顺手藏掉我们。
+    /// 这里是兜底：只要不是我们主动收起来的，就把 Dock 和玻璃板重新显示出来，并重申 topmost。
+    /// </summary>
+    void EnsureShellVisible()
+    {
+        if (_hwnd == IntPtr.Zero || _launchpadOpen) return;
+        try
+        {
+            if (!IsWindowVisible(_hwnd))
+            {
+                ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+                SchedulePlace();
+                Log.Info("Dock was hidden by something else: shown again");
+            }
+            if (_backdrop is not null && !IsWindowVisible(_backdrop.Handle)) _backdrop.SetVisible(true);
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Bringing the dock back");
+        }
+    }
 
     /// <summary>Reserves the dock's strip of its monitor and sizes this window to cover it.</summary>
     void Place()
@@ -1965,6 +1997,14 @@ internal sealed class DockWindow : Window
             case WM_MOUSEACTIVATE:
                 handled = true;
                 return MA_NOACTIVATE;
+            case WM_SYSCOMMAND when ((long)wParam & 0xFFF0) == SC_MINIMIZE:
+                // Win+D / 显示桌面 想最小化这条 Dock：直接拒绝，它就是外壳本身。
+                handled = true;
+                return IntPtr.Zero;
+            case 0x0005 when (int)wParam == SIZE_MINIMIZED:   // WM_SIZE
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                handled = true;
+                return IntPtr.Zero;
             case WM_SETTINGCHANGE:
                 if (lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet")
                 {

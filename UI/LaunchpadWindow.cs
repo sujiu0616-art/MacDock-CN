@@ -237,6 +237,12 @@ internal sealed class LaunchpadWindow : Window
         _root.Children.Add(_message);
         _root.Children.Add(_dots);
         // 缩放围绕中心：进入动画 0.9 → 1.0，小屏幕的等比缩小也在这里
+        // Win+D / 显示桌面 会把启动台也最小化：macOS 这种情况下就是直接关掉。
+        StateChanged += (_, _) =>
+        {
+            if (WindowState == WindowState.Minimized) Close();
+        };
+
         _root.RenderTransformOrigin = new Point(0.5, 0.5);
         _root.RenderTransform = new TransformGroup { Children = { new ScaleTransform(_fit, _fit), _entrance } };
         Content = _root;

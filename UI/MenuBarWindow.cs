@@ -234,6 +234,13 @@ internal sealed class MenuBarWindow : Window
     {
         switch (msg)
         {
+            case 0x0112 when ((long)wParam & 0xFFF0) == 0xF020:   // WM_SYSCOMMAND / SC_MINIMIZE
+                handled = true;
+                return IntPtr.Zero;
+            case 0x0005 when (int)wParam == 1:                    // WM_SIZE / SIZE_MINIMIZED
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                handled = true;
+                return IntPtr.Zero;
             case WM_MOUSEACTIVATE:
                 // Clicks never take the focus from the app in front, as on the Mac.
                 handled = true;
