@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace MacDock.Core;
@@ -107,12 +108,25 @@ internal static class CommandLine
         });
         Check("language", () =>
         {
-            Loc.Init("it");
-            string it = Loc.T("Quit {0}", AppInfo.Name);
             Loc.Init("en");
             string en = Loc.T("Quit {0}", AppInfo.Name);
+            Loc.Init("it");
+            string it = Loc.T("Quit {0}", AppInfo.Name);
+            Loc.Init("zh-CN");
+            string zh = Loc.T("Quit {0}", AppInfo.Name);
             if (it == en) throw new InvalidOperationException("Italian table not used");
-            return $"{en} / {it}";
+            if (zh == en) throw new InvalidOperationException("Chinese table not used");
+            if (zh == it) throw new InvalidOperationException("the Chinese table is the Italian one");
+            var problems = Loc.ChineseTableProblems(); // 中文表漏 key 或丢了 {n} 占位符
+            if (problems.Count > 0) throw new InvalidOperationException(string.Join("; ", problems));
+            // 下拉项由 Loc.Languages 生成：显示名重复说明有语言没配名字，选中项会错位。
+            var names = Loc.Languages.Select(Loc.LanguageName).ToList();
+            if (names.Distinct().Count() != names.Count) throw new InvalidOperationException("duplicate language names: " + string.Join(", ", names));
+            // "" = 跟随 Windows：中文 Windows 上默认就该是中文，不然默认语言选错了。
+            Loc.Init("");
+            if (CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "zh" && Loc.T("Quit {0}", AppInfo.Name) != zh)
+                throw new InvalidOperationException("\"\" does not follow the Chinese Windows UI language");
+            return $"{en} / {it} / {zh}";
         });
         Check("layout", () =>
         {

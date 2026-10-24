@@ -111,12 +111,13 @@ internal sealed class SettingsWindow : Window
         return grid;
     }
 
-    /// <summary>The interface language. Menus change at once, this window when it is opened again.</summary>
+    /// <summary>界面的语言。菜单立刻换语言，这个窗口本身要重新打开才换。</summary>
     UIElement LanguageRow()
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 5) };
         row.Children.Add(new TextBlock { Text = Loc.T("Language"), Foreground = _text, Width = 190, VerticalAlignment = VerticalAlignment.Center });
-        var names = new[] { Loc.T("Same as Windows"), "English", "Italiano" };
+        // 显示名直接由 Loc.Languages 生成：顺序天然对齐，加一门语言不用再改这里。
+        var names = Loc.Languages.Select(Loc.LanguageName).ToList();
         var combo = new ComboBox { Width = 210, VerticalAlignment = VerticalAlignment.Center };
         foreach (var name in names) combo.Items.Add(name);
         combo.SelectedIndex = Math.Max(0, Array.IndexOf(Loc.Languages, _settings.Language ?? ""));
