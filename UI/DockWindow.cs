@@ -105,6 +105,8 @@ internal sealed class DockWindow : Window
     IntPtr _placedMonitor;
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
+    /// <summary>常驻的全屏检测：Explorer 的 ABN_FULLSCREENAPP 在任务栏被隐藏后不可靠，自己每 500ms 看一眼。</summary>
+    readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
@@ -220,11 +222,15 @@ internal sealed class DockWindow : Window
         _displayName = _chosenDisplay = config.Settings.Display;
         _displayCheck.Tick += (_, _) =>
         {
-            // 任务栏被隐藏后 Explorer 不再可靠地发 ABN_FULLSCREENAPP：自己看一眼前台窗口。
-            if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
             _displayCheck.Stop();
             CheckDisplays();
         };
+        _fullscreenCheck.Tick += (_, _) =>
+        {
+            if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
+        };
+        _fullscreenCheck.Start();
+
         _followTimer.Tick += (_, _) => FollowPointer();
         _shellGuard.Interval = TimeSpan.FromSeconds(5);
         _shellGuard.Tick += (_, _) => EnsureShellVisible();
@@ -330,6 +336,7 @@ internal sealed class DockWindow : Window
         Try(() => _appBar?.Dispose(), "Releasing the Dock's screen space");
         _appBar = null;
         _followTimer.Stop();
+        _fullscreenCheck.Stop();
         _trashTimer?.Stop();
         _trashWatch?.Dispose();
         _trashWatch = null;
@@ -2005,10 +2012,22 @@ internal sealed class DockWindow : Window
         if (pid == Environment.ProcessId) return false;
 
         if (!GetWindowRect(foreground, out var rect)) return false;
-        var bounds = CurrentDisplay().Bounds;
+        var display = CurrentDisplay();
+        var bounds = display.Bounds;
         const int tolerance = 2;
-        return rect.Left <= bounds.Left + tolerance && rect.Top <= bounds.Top + tolerance
-               && rect.Right >= bounds.Right - tolerance && rect.Bottom >= bounds.Bottom - tolerance;
+
+        // 情况一：盖住整块屏（含 appbar 那两条）= 无边框全屏 / 全屏游戏
+        if (rect.Left <= bounds.Left + tolerance && rect.Top <= bounds.Top + tolerance
+            && rect.Right >= bounds.Right - tolerance && rect.Bottom >= bounds.Bottom - tolerance)
+            return true;
+
+        // 情况二：无标题栏 + 铺满工作区。bilibili / MPC-BE 这类播放器的"全屏"只是让开了 appbar，
+        // 屏幕上看就是全屏视频，Dock 压在上面同样难看。
+        long style = (long)GetWindowLongPtr(foreground, GWL_STYLE);   // WS_CAPTION = WS_BORDER | WS_DLGFRAME
+        if ((style & 0x00C00000L) != 0) return false;   // WS_CAPTION
+        var work = display.Work;
+        return rect.Left <= work.Left + tolerance && rect.Top <= work.Top + tolerance
+               && rect.Right >= work.Right - tolerance && rect.Bottom >= work.Bottom - tolerance;
     }
 
     void ApplyTheme()
