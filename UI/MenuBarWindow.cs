@@ -138,6 +138,7 @@ internal sealed class MenuBarWindow : Window
         DpiChanged += (_, _) => SchedulePlace();
 
         Place();
+        _glass.BrightnessChanged += _ => ApplyForeground();
         ApplyTheme();
         ShowAppName(_owner.AppName);
         ShowClock(_owner.ClockText, _owner.ClockTip);
@@ -156,18 +157,28 @@ internal sealed class MenuBarWindow : Window
     public void ApplyTheme()
     {
         _glass.ApplyTheme();
-        bool dark = Theme.IsDark;
-        var text = new SolidColorBrush(dark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1D, 0x1D, 0x1F));
+        ApplyForeground();
+        if (_tray is not null) _tray.HoverBrush = HoverBrush;
+    }
+
+    /// <summary>
+    /// Text and glyphs follow the glass, not the Windows theme: the bar now shows a blurred crop of the
+    /// wallpaper, so a bright wallpaper turns it bright and white text would disappear into it.
+    /// </summary>
+    void ApplyForeground()
+    {
+        _darkText = !_glass.Bright && Theme.IsDark;
+        var text = new SolidColorBrush(_darkText ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1D, 0x1D, 0x1F));
         text.Freeze();
         foreach (var t in _texts) t.Foreground = text;
         foreach (var s in _shapes) s.Fill = text;
-        if (_tray is not null) _tray.HoverBrush = HoverBrush;
     }
 
     /// <summary>After sleep or unlock DWM may show the glass as inactive (flat colour): make it active again.</summary>
     public void Reactivate() => _glass.Reactivate();
 
-    static Brush HoverBrush => Theme.IsDark ? HoverDark : HoverLight;
+    bool _darkText = true;
+    Brush HoverBrush => _darkText ? HoverDark : HoverLight;
     static readonly Brush HoverDark = Frozen(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
     static readonly Brush HoverLight = Frozen(Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
 
@@ -393,22 +404,58 @@ internal sealed class MenuBarWindow : Window
 /// <summary>The acrylic strip under the menu bar's content.</summary>
 internal sealed class MenuBarGlass : AcrylicWindow
 {
-    readonly Border _tint = new();
+    readonly Border _tint;
+    readonly Image _surface;
     bool _visible = true;
 
     public MenuBarGlass() : base(rounded: false)
     {
         Title = "MacDock Menu Bar Glass";
-        Content = _tint;
+        Content = WallpaperFrost.Build(out _surface, out _tint, 10);
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        // The bar sits over the wallpaper (the reserved strip keeps maximised windows below it), so it
+        // paints a blurred crop of it rather than the OS backdrop, which reads as an opaque dark band
+        // on this build. The accent blur stays as the fallback for a wallpaper-less theme.
+        UseAccentBlur();
+        RefreshSurface(GlassBounds);
+    }
+
+    protected override void OnBoundsChanged(RECT bounds) => RefreshSurface(bounds);
+
+    /// <summary>Tells the bar whether the glass under it came out bright: white text would vanish there.</summary>
+    public event Action<bool>? BrightnessChanged;
+
+    /// <summary>True while the glass behind the bar is bright, i.e. the bar wants dark text.</summary>
+    public bool Bright { get; private set; }
+
+    void RefreshSurface(RECT bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
+        var brush = WallpaperFrost.BrushFor(bounds, display, out double luminance);
+        _surface.Source = brush?.ImageSource;
+        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
+        _tint.Background = brush is null
+            ? new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0xA6, 0x24, 0x26, 0x28) : Color.FromArgb(0xB8, 0xFF, 0xFF, 0xFF))
+            : new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x33, 0x08, 0x08, 0x0A) : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
+
+        // With a wallpaper the bar follows its brightness; without one it keeps the theme choice.
+        bool? bright = brush is null ? null : luminance > 140;
+        if (bright is bool value && value != Bright)
+        {
+            Bright = value;
+            BrightnessChanged?.Invoke(value);
+        }
     }
 
     public override void ApplyTheme()
     {
         ApplyGlassTheme(DWMWA_COLOR_NONE);
-        // macOS dark: a deep neutral charcoal over the acrylic; light: white, dense enough for the icons.
-        _tint.Background = new SolidColorBrush(Theme.IsDark
-            ? Color.FromArgb(0xA6, 0x24, 0x26, 0x28) // 65%
-            : Color.FromArgb(0xB8, 0xFF, 0xFF, 0xFF)); // 72%
+        // The tint itself lives in RefreshSurface: it depends on whether a wallpaper could be shown.
     }
 
     public void SetVisible(bool visible)

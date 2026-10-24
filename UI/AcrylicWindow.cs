@@ -57,7 +57,14 @@ internal abstract class AcrylicWindow : Window
         SetWindowPos(Handle, IntPtr.Zero, r.Left, r.Top, Math.Max(1, r.Width), Math.Max(1, r.Height),
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
         ApplyRegion();
+        OnBoundsChanged(r);
     }
+
+    /// <summary>The glass rectangle in physical screen pixels (valid after the first SetBounds).</summary>
+    protected RECT GlassBounds => _bounds;
+
+    /// <summary>Called after the glass moved or resized, for windows that paint their own backdrop.</summary>
+    protected virtual void OnBoundsChanged(RECT bounds) { }
 
     /// <summary>Corner radius of the glass in physical pixels; 0 leaves the window square.</summary>
     public void SetGlassRadius(int pixels)
@@ -105,7 +112,9 @@ internal abstract class AcrylicWindow : Window
         {
             AccentState = ACCENT_ENABLE_BLURBEHIND,
             AccentFlags = 0,
-            GradientColor = 0, // no tint from the compositor: the plate's tint is a WPF brush
+            // Near-zero ALPHA in AABBGGRR, not 0: DWM reads a 0 gradient as opaque black, which is what
+            // made the glass a dark plate. 0x01FFFFFF is the usual "blur without a tint" value.
+            GradientColor = 0x01FFFFFF, // the tint itself is the plate's own WPF brush
         };
         int size = Marshal.SizeOf<AccentPolicy>();
         IntPtr buffer = Marshal.AllocHGlobal(size);

@@ -15,21 +15,39 @@ namespace MacDock.UI;
 /// </summary>
 internal sealed class BackdropWindow : AcrylicWindow
 {
-    readonly Border _tint = new();
+    readonly Border _tint;
+    readonly Image _surface;
     bool _visible = true;
 
     public BackdropWindow() : base(rounded: false)
     {
         Title = "MacDock Backdrop";
-        Content = _tint;
+        Content = WallpaperFrost.Build(out _surface, out _tint, 14);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        // The plate is cut to a region, which costs the window DWM's system backdrop: ask for the
-        // accent acrylic instead, so the rounded plate still blurs the desktop behind it.
+        // The plate is cut to a region, which costs the window DWM's system backdrop. The OS blur that
+        // replaced it reads almost opaque here, so the plate paints the wallpaper itself instead; the
+        // accent blur stays as the fallback for when Windows has no wallpaper to crop.
         UseAccentBlur();
+        RefreshSurface(GlassBounds);
+    }
+
+    protected override void OnBoundsChanged(RECT bounds) => RefreshSurface(bounds);
+
+    void RefreshSurface(RECT bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
+        var brush = WallpaperFrost.BrushFor(bounds, display, out double luminance);
+        _surface.Source = brush?.ImageSource;
+        // No wallpaper to crop (a theme with a solid colour): fall back to the accent blur's own look.
+        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
+        _tint.Background = brush is null
+            ? new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x59, 0, 0, 0) : Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF))
+            : new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x2E, 0, 0, 0) : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
     }
 
     public override void ApplyTheme()
@@ -37,12 +55,7 @@ internal sealed class BackdropWindow : AcrylicWindow
         // The rim is drawn by the dock's own layer, where it can be a translucent 1px line; DWM's
         // border colour has no alpha, so it would read as a hard grey edge.
         ApplyGlassTheme(DWMWA_COLOR_NONE);
-        // Light black, light white: the blur brightens whatever is behind the plate, so the tint is what
-        // keeps the dark Dock a dark glass (a 20% tint over a bright wallpaper washed out to a pale blue)
-        // while still letting the desktop show through, which is the point of the glass.
-        _tint.Background = new SolidColorBrush(Theme.IsDark
-            ? Color.FromArgb(0x59, 0x00, 0x00, 0x00)
-            : Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF));
+        // The tint is applied by RefreshSurface, which also knows whether there is a wallpaper to show.
     }
 
     public void SetVisible(bool visible)

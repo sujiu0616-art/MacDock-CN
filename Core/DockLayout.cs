@@ -20,7 +20,7 @@ internal sealed class DockMetrics(double iconSize, double maxSize, DockEdge edge
     /// <summary>Width of the separator slot between pinned and running apps (the line sits in its middle).</summary>
     public double SeparatorWidth => Math.Round(IconSize * 0.28);
     /// <summary>How far from the pointer icons are still magnified.</summary>
-    public double Range => IconSize * 3.2;
+    public double Range => IconSize * 2.6;
     public double PlateThickness => IconSize + 2 * Pad;
     /// <summary>
     /// Corner radius of the plate: a share of its height (the Dock grows rounder with bigger icons),

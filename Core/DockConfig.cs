@@ -10,7 +10,7 @@ internal sealed class DockSettings
     /// <summary>Resting icon size, in device-independent pixels (56 = the Dock of macOS Tahoe).</summary>
     public double IconSize { get; set; } = 56;
     public bool Magnification { get; set; } = true;
-    public double MagnifiedSize { get; set; } = 96;
+    public double MagnifiedSize { get; set; } = 76;
     public bool AutoHide { get; set; }
     public DockEdge Edge { get; set; } = DockEdge.Bottom;
 
