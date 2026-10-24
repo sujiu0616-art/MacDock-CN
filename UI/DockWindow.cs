@@ -462,7 +462,10 @@ internal sealed class DockWindow : Window
         _m = BuildMetrics();
 
         int thick = (int)Math.Ceiling(_m.WindowThickness * _scale);
-        int reserve = settings.AutoHide ? 0 : (int)Math.Ceiling((_m.EdgeGap + _m.PlateThickness) * _scale);
+        // 预留高度 = 板高 + 一条呼吸间距：原来预留刚好等于板高，最大化窗口的下边缘与玻璃板上沿
+        // 落在同一像素上（视觉上就是"贴在一起/有点重叠"）。留 6 DIU 之后窗口与 Dock 之间有一条缝。
+        const double DockGap = 6;
+        int reserve = settings.AutoHide ? 0 : (int)Math.Ceiling((_m.EdgeGap + _m.PlateThickness + DockGap) * _scale);
         var bar = _appBar.SetPosition(Edge, display.Bounds, reserve);
         var work = display.Work;
 
@@ -737,11 +740,16 @@ internal sealed class DockWindow : Window
         Canvas.SetTop(_plateRim, rim.Top);
 
         // The border stroke sits inside the element, so the shadow widens the element by its own band and strokes that.
+        // 但只在**朝屏幕边缘**的那几边长：朝屏幕内部的一侧收到板边，否则投影会盖到窗口内容上。
         _plateShadow.CornerRadius = new CornerRadius(radius + PlateShadowBand);
-        _plateShadow.Width = rim.Width + 2 * PlateShadowBand;
-        _plateShadow.Height = rim.Height + 2 * PlateShadowBand;
-        Canvas.SetLeft(_plateShadow, rim.Left - PlateShadowBand);
-        Canvas.SetTop(_plateShadow, rim.Top - PlateShadowBand);
+        double growUp = Edge == DockEdge.Bottom ? 0 : PlateShadowBand;     // 上沿
+        double growDown = PlateShadowBand;                                // 下沿（没有顶置 Dock，恒长）
+        double growLeft = Edge == DockEdge.Right ? 0 : PlateShadowBand;    // 左沿
+        double growRight = Edge == DockEdge.Left ? 0 : PlateShadowBand;    // 右沿
+        _plateShadow.Width = rim.Width + growLeft + growRight;
+        _plateShadow.Height = rim.Height + growUp + growDown;
+        Canvas.SetLeft(_plateShadow, rim.Left - growLeft);
+        Canvas.SetTop(_plateShadow, rim.Top - growUp);
 
         // The sheen runs along the plate's outer edge, clear of the corners: light comes from above.
         double along = radius * 0.75;
