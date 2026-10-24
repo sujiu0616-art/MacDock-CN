@@ -405,13 +405,13 @@ internal sealed class MenuBarWindow : Window
 internal sealed class MenuBarGlass : AcrylicWindow
 {
     readonly Border _tint;
-    readonly Image _surface;
     bool _visible = true;
 
     public MenuBarGlass() : base(rounded: false)
     {
         Title = "MacDock Menu Bar Glass";
-        Content = WallpaperFrost.Build(out _surface, out _tint, 10);
+        _tint = new Border();
+        Content = _tint;   // 只有一层 tint：真实模糊来自窗口的 accent 策略，不画壁纸
     }
 
     protected override void OnSourceInitialized(EventArgs e)
