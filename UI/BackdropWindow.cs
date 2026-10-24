@@ -21,8 +21,6 @@ namespace MacDock.UI;
 internal sealed class BackdropWindow : Window
 {
     readonly Border _tint;
-    readonly Image _surface;
-    readonly Grid _layers;
     bool _visible = true;
     int _radiusPx;
 
@@ -42,8 +40,8 @@ internal sealed class BackdropWindow : Window
         Width = 10;
         Height = 10;
 
-        _layers = WallpaperFrost.Build(out _surface, out _tint, 14);
-        Content = _layers;
+        _tint = new Border();
+        Content = _tint;
         SizeChanged += (_, _) => UpdateClip();
     }
 
@@ -63,7 +61,6 @@ internal sealed class BackdropWindow : Window
         if (Handle == IntPtr.Zero || r.Width <= 0 || r.Height <= 0) return;
         SetWindowPos(Handle, IntPtr.Zero, r.Left, r.Top, r.Width, r.Height,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-        RefreshSurface(r);
         UpdateClip();
     }
 
@@ -85,32 +82,16 @@ internal sealed class BackdropWindow : Window
         double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
         double radius = _radiusPx / (scale <= 0 ? 1 : scale);
         var rect = new Rect(0, 0, ActualWidth, ActualHeight);
-        _layers.Clip = radius > 0.5 ? new RectangleGeometry(rect, radius, radius) : null;
-    }
-
-    void RefreshSurface(RECT bounds)
-    {
-        if (bounds.Width <= 0 || bounds.Height <= 0) return;
-        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
-        var brush = WallpaperFrost.BrushFor(bounds, display, out _);
-        _surface.Source = brush?.ImageSource;
-        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
-        // No wallpaper to crop (a theme with a solid colour): a denser tint keeps the icons readable.
-        _tint.Background = brush is null
-            ? new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x59, 0, 0, 0) : Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF))
-            : new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x2E, 0, 0, 0) : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
+        _tint.Clip = radius > 0.5 ? new RectangleGeometry(rect, radius, radius) : null;
     }
 
     public void ApplyTheme()
     {
         if (Handle == IntPtr.Zero) return;
-        RefreshSurface(new RECT
-        {
-            Left = (int)Left,
-            Top = (int)Top,
-            Right = (int)(Left + ActualWidth),
-            Bottom = (int)(Top + ActualHeight),
-        });
+        // 真透明：只留一层很淡的 tint，背后是壁纸、窗口还是视频都能透出来（不模糊）。
+        _tint.Background = new SolidColorBrush(Theme.IsDark
+            ? Color.FromArgb(0x38, 0x08, 0x08, 0x0C)   // 22%
+            : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)); // 25%
         UpdateClip();
     }
 

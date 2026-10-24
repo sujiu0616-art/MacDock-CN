@@ -139,7 +139,6 @@ internal sealed class MenuBarWindow : Window
 
         Place();
         Typo.Crisp(this);
-        _glass.BrightnessChanged += _ => ApplyForeground();
         ApplyTheme();
         ShowAppName(_owner.AppName);
         ShowClock(_owner.ClockText, _owner.ClockTip);
@@ -168,7 +167,7 @@ internal sealed class MenuBarWindow : Window
     /// </summary>
     void ApplyForeground()
     {
-        _darkText = !_glass.Bright && Theme.IsDark;
+        _darkText = Theme.IsDark;
         var text = new SolidColorBrush(_darkText ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1D, 0x1D, 0x1F));
         text.Freeze();
         foreach (var t in _texts) t.Foreground = text;
@@ -422,41 +421,18 @@ internal sealed class MenuBarGlass : AcrylicWindow
         // paints a blurred crop of it rather than the OS backdrop, which reads as an opaque dark band
         // on this build. The accent blur stays as the fallback for a wallpaper-less theme.
         UseAccentBlur();
-        RefreshSurface(GlassBounds);
     }
 
-    protected override void OnBoundsChanged(RECT bounds) => RefreshSurface(bounds);
-
-    /// <summary>Tells the bar whether the glass under it came out bright: white text would vanish there.</summary>
-    public event Action<bool>? BrightnessChanged;
-
-    /// <summary>True while the glass behind the bar is bright, i.e. the bar wants dark text.</summary>
-    public bool Bright { get; private set; }
-
-    void RefreshSurface(RECT bounds)
-    {
-        if (bounds.Width <= 0 || bounds.Height <= 0) return;
-        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
-        var brush = WallpaperFrost.BrushFor(bounds, display, out double luminance);
-        _surface.Source = brush?.ImageSource;
-        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
-        _tint.Background = brush is null
-            ? new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0xA6, 0x24, 0x26, 0x28) : Color.FromArgb(0xB8, 0xFF, 0xFF, 0xFF))
-            : new SolidColorBrush(Theme.IsDark ? Color.FromArgb(0x33, 0x08, 0x08, 0x0A) : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-
-        // With a wallpaper the bar follows its brightness; without one it keeps the theme choice.
-        bool? bright = brush is null ? null : luminance > 140;
-        if (bright is bool value && value != Bright)
-        {
-            Bright = value;
-            BrightnessChanged?.Invoke(value);
-        }
-    }
+    /// <summary>真实模糊由窗口的 accent 策略提供，这里只决定"多暗"。</summary>
+    public bool Bright => !Theme.IsDark;
 
     public override void ApplyTheme()
     {
         ApplyGlassTheme(DWMWA_COLOR_NONE);
-        // The tint itself lives in RefreshSurface: it depends on whether a wallpaper could be shown.
+        // 很淡的一层：模糊本身来自 accent 策略，tint 只负责把亮度压到 mac 那个程度。
+        _tint.Background = new SolidColorBrush(Theme.IsDark
+            ? Color.FromArgb(0x4D, 0x0A, 0x0A, 0x0C)   // 30%
+            : Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF)); // 35%
     }
 
     public void SetVisible(bool visible)
