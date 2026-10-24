@@ -24,11 +24,12 @@ namespace MacDock.UI;
 internal sealed class LaunchpadWindow : Window
 {
     // 尺寸都是 DIU：150% 缩放下 1 DIU = 1.5 物理像素，所以 84 DIU 的图标 = 126 物理像素
-    const double CellWidth = 148;
-    const double CellHeight = 134;
-    const double IconSize = 88;
-    const double SearchWidth = 330;
-    const double SearchHeight = 34;
+    // macOS 的启动台在 1707 DIU 宽的屏上大约是 7 列 × 4 行铺满 80% 宽：格子 200、图标 120。
+    const double CellWidth = 200;
+    const double CellHeight = 190;
+    const double IconSize = 120;
+    const double SearchWidth = 380;
+    const double SearchHeight = 38;
 
     const int EntranceMs = 160;   // 进入：0.9 → 1.0 的缩放 + 淡入，mac 在 120~180ms 之间
     const int ExitMs = 130;
@@ -41,12 +42,12 @@ internal sealed class LaunchpadWindow : Window
     static readonly Brush LightText = Frozen(0x1D, 0x1D, 0x1F);
     static readonly Brush DarkSubtle = Frozen(0xAD, 0xAD, 0xB4);
     static readonly Brush LightSubtle = Frozen(0x5C, 0x5C, 0x60);
-    static readonly Brush DarkHover = Frozen(0xFF, 0xFF, 0xFF, 0x1F);
-    static readonly Brush LightHover = Frozen(0x00, 0x00, 0x00, 0x14);
-    static readonly Brush DarkSelected = Frozen(0xFF, 0xFF, 0xFF, 0x2E);
-    static readonly Brush LightSelected = Frozen(0x00, 0x00, 0x00, 0x21);
-    static readonly Brush DarkOutline = Frozen(0xFF, 0xFF, 0xFF, 0x3D);
-    static readonly Brush LightOutline = Frozen(0x00, 0x00, 0x00, 0x33);
+    static readonly Brush DarkHover = Frozen(0xFF, 0xFF, 0xFF, 0x0F);
+    static readonly Brush LightHover = Frozen(0x00, 0x00, 0x00, 0x0A);
+    static readonly Brush DarkSelected = Frozen(0xFF, 0xFF, 0xFF, 0x1C);
+    static readonly Brush LightSelected = Frozen(0x00, 0x00, 0x00, 0x12);
+    static readonly Brush DarkOutline = Frozen(0xFF, 0xFF, 0xFF, 0x24);
+    static readonly Brush LightOutline = Frozen(0x00, 0x00, 0x00, 0x1F);
     static readonly Brush DarkBubble = Frozen(0x0A, 0x0A, 0x0E, 0xCC);
     static readonly Brush LightBubble = Frozen(0xFF, 0xFF, 0xFF, 0xE6);
     static readonly Brush DarkDotOn = Frozen(0xFF, 0xFF, 0xFF, 0xE6);
@@ -93,8 +94,9 @@ internal sealed class LaunchpadWindow : Window
 
     LaunchpadWindow()
     {
-        // 壁纸很亮时玻璃也是亮的：这时用浅色一套（深字），否则白字会糊在玻璃里。
-        bool dark = Theme.IsDark && WallpaperAt(GetCursorPos(out var probe) ? Displays.FromPoint(probe) : Displays.Primary()) <= 140;
+        // 配色跟系统主题走（macOS 的启动台也是）：深色=暗玻璃+白字，浅色=白玻璃+深字。
+        // 之前按壁纸亮度翻配色，但玻璃遮罩仍按主题算，结果深色下出现"深字压深底"。
+        bool dark = Theme.IsDark;
         _text = dark ? DarkText : LightText;
         _subtle = dark ? DarkSubtle : LightSubtle;
         _tileHover = dark ? DarkHover : LightHover;
@@ -186,7 +188,7 @@ internal sealed class LaunchpadWindow : Window
             Padding = new Thickness(13, 0, 13, 0),
             Child = field,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 44, 0, 18),
+            Margin = new Thickness(0, 36, 0, 22),
         };
 
         _message = new TextBlock
@@ -202,12 +204,13 @@ internal sealed class LaunchpadWindow : Window
 
         _dots.Orientation = Orientation.Horizontal;
         _dots.HorizontalAlignment = HorizontalAlignment.Center;
-        _dots.Margin = new Thickness(0, 10, 0, 34);
+        _dots.Margin = new Thickness(0, 14, 0, 40);
 
         for (int i = 0; i < LaunchpadModel.Columns; i++) _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(CellWidth) });
         for (int i = 0; i < LaunchpadModel.Rows; i++) _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(CellHeight) });
         _grid.HorizontalAlignment = HorizontalAlignment.Center;
         _grid.VerticalAlignment = VerticalAlignment.Center;
+        _grid.ClipToBounds = false;   // 名字第二行要能画出来，不能被格子裁掉
 
         _root.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
         _root.Opacity = 0;
@@ -243,13 +246,6 @@ internal sealed class LaunchpadWindow : Window
     }
 
     /// <summary>打开启动台（Dock 以后的入口）：同时只许有一个。</summary>
-    /// <summary>Average brightness of the wallpaper on that monitor (0-255); decides the palette.</summary>
-    static double WallpaperAt(Display display)
-    {
-        WallpaperFrost.BrushFor(display.Bounds, display, out double luminance);
-        return luminance;
-    }
-
     public static LaunchpadWindow Open()
     {
         if (_open is { } existing)
@@ -481,7 +477,7 @@ internal sealed class LaunchpadWindow : Window
     {
         var query = _search.Text.Trim();
         _results = query.Length == 0 ? _all : _all.Where(entry => entry.Matches(query)).ToList();
-        _selected = 0;
+        _selected = -1;   // 不预选：打开时不该有一个格子自己亮着
         ShowPage(0);
     }
 
@@ -554,7 +550,7 @@ internal sealed class LaunchpadWindow : Window
         else UpdateSelection();
     }
 
-    void Move(int delta) => Select(_selected + delta);
+    void Move(int delta) => Select(_selected < 0 ? (delta > 0 ? 0 : _results.Count - 1) : _selected + delta);
 
     void TurnPage(int delta)
     {
@@ -620,7 +616,7 @@ internal sealed class LaunchpadWindow : Window
                 TurnPage(1);
                 break;
             case Key.Enter:
-                if (_results.Count > 0) Launch(_results[_selected]);
+                if (_results.Count > 0 && _selected >= 0) Launch(_results[_selected]);
                 break;
             default:
                 return; // 其余按键（包括退格）留给搜索框
@@ -679,16 +675,19 @@ internal sealed class LaunchpadWindow : Window
                 Text = entry.Name,
                 Foreground = owner._text,
                 FontFamily = Font,
-                FontSize = 13,
+                FontSize = 14,
                 TextAlignment = TextAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = CellWidth - 16,
-                MaxHeight = 34, // 两行 13 DIU 的正文
-                LineHeight = 17,
-                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                MaxWidth = CellWidth - 24,
+                MaxHeight = 48, // 两行 13 DIU 的正文，留出下伸部（不然 "Tools" 会被切掉半截）
             };
             TextOptions.SetTextFormattingMode(_label, TextFormattingMode.Display);
+            // 没有底了，用一层柔阴影顶住：亮壁纸上白字也能读。
+            _label.Effect = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                Color = Colors.Black, BlurRadius = 8, ShadowDepth = 1, Opacity = 0.55, RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance,
+            };
 
             _bubble = new Border
             {
@@ -741,14 +740,16 @@ internal sealed class LaunchpadWindow : Window
             if (icon is not null) _icon.Source = icon;
         }
 
-        /// <summary>悬停和选中都给出高亮；选中的更亮，名称变成气泡（mac 悬停也是这个意思）。</summary>
+        /// <summary>
+        /// 只画一层极淡的底（选中比悬停稍亮）+ 极细描边，名字始终是纯文字 —— macOS 的启动台没有
+        /// "名字药丸"，那玩意儿压在图标下面既挡邻居又显脏。
+        /// </summary>
         public void Apply(bool selected, bool hovered)
         {
-            bool lit = selected || hovered;
             Root.Background = selected ? _owner._tileSelected : hovered ? _owner._tileHover : Brushes.Transparent;
             Root.BorderBrush = selected ? _owner._tileOutline : Brushes.Transparent;
-            _bubble.Background = lit ? _owner._bubble : Brushes.Transparent;
-            _label.Foreground = lit ? _owner._bubbleText : _owner._text;
+            _bubble.Background = Brushes.Transparent;
+            _label.Foreground = _owner._text;
         }
     }
 }
@@ -814,7 +815,7 @@ internal sealed class LaunchpadGlass : AcrylicWindow
     /// <summary>How dark the veil is: macOS keeps the desktop readable through Launchpad, so this is a
     /// thin tint over the blur rather than the near-black sheet it used to be.</summary>
     static Color Tint(double alpha) => Theme.IsDark
-        ? Color.FromArgb((byte)Math.Round(alpha * 0x59), 0x0A, 0x0A, 0x0E)   // 35%
+        ? Color.FromArgb((byte)Math.Round(alpha * 0x73), 0x0A, 0x0A, 0x0E)   // 45%: 白字要底
         : Color.FromArgb((byte)Math.Round(alpha * 0x40), 0xF4, 0xF4, 0xF6);  // 25%
 }
 

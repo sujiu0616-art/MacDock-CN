@@ -91,6 +91,9 @@ internal static class LaunchpadModel
         "uninstall", "卸载", "readme", "read me", "help", "帮助", "website", "官方网站", "official site",
         "repair", "修复", "documentation", "changelog", "release notes", "许可协议", "license agreement",
         "activate", "deactivate", "激活", "反激活", "updater", "更新程序",
+        // 目标是空的 shell 项与安装型助手：解析不出 exe，只能按名字挡
+        "file explorer", "control panel", "administrative tools", "run", "runonce",
+        "distiller", "桌面", "此电脑", "打开日志目录",
     ];
 
     /// <summary>目标文件是这些后缀时不是应用（帮助文档、网页、文档、安装包、系统管理单元）。</summary>
@@ -115,7 +118,7 @@ internal static class LaunchpadModel
     public static List<LaunchpadEntry> Scan()
     {
         var byTarget = new Dictionary<string, LaunchpadEntry>(StringComparer.OrdinalIgnoreCase);
-        int considered = 0, skippedDistro = 0, skippedNoise = 0, skippedNotApp = 0, merged = 0;
+        int considered = 0, skippedDistro = 0, skippedNoise = 0, skippedNotApp = 0, skippedSystem = 0, merged = 0;
         using var targets = new ShortcutTargets();
 
         foreach (var root in Folders())
@@ -133,6 +136,7 @@ internal static class LaunchpadModel
 
                 var target = targets.Target(file);
                 if (!IsApplication(target)) { skippedNotApp++; continue; }
+                if (IsSystemTool(target)) { skippedSystem++; continue; }
 
                 // 同一个程序在开始菜单里常有好几条（微信两份、Gmail 走 chrome_proxy……）：按目标合并。
                 // 解析不出目标（UWP 的 shell: 条目）时用快捷方式路径当键，别把条目丢掉。
@@ -151,7 +155,7 @@ internal static class LaunchpadModel
         var entries = byTarget.Values.ToList();
         entries.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase));
         Log.Info($"Launchpad: {entries.Count} apps kept of {considered} shortcuts " +
-                 $"(distro {skippedDistro}, noise {skippedNoise}, not-an-app {skippedNotApp}, merged {merged})");
+                 $"(distro {skippedDistro}, noise {skippedNoise}, not-an-app {skippedNotApp}, system {skippedSystem}, merged {merged})");
         return entries;
     }
 
@@ -176,6 +180,30 @@ internal static class LaunchpadModel
             Log.Error(ex, $"Checking the shortcut target {target}");
             return true;
         }
+    }
+
+    /// <summary>系统自带工具的文件名：它们也出现在开始菜单里，但不是"应用"。</summary>
+    static readonly string[] SystemTools =
+    [
+        "explorer.exe",            // "打开日志目录"/"桌面" 这类快捷方式其实都是它
+        "cmd.exe", "control.exe", "charmap.exe", "dfrgui.exe", "cleanmgr.exe", "regedit.exe",
+        "taskmgr.exe", "perfmon.exe", "msinfo32.exe", "msconfig.exe", "iscsicpl.exe", "mdsched.exe",
+        "odbcad32.exe", "recoverydrive.exe", "narrator.exe", "magnify.exe", "osk.exe",
+        "voiceaccess.exe", "livecaptions.exe", "psr.exe", "wslg.exe", "systemsettings.exe",
+        "mmc.exe", "eventvwr.exe", "resmon.exe",
+    ];
+
+    /// <summary>
+    /// 目标是不是 Windows 自带的工具：%WINDIR% 下的东西几乎都是（命令提示符、控制面板、磁盘整理、
+    /// 事件查看器、辅助功能…），真应用不会装在那里；再加上一份文件名名单兜住 Program Files 里的系统件。
+    /// </summary>
+    static bool IsSystemTool(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return false;      // 未知目标：按应用放行
+        var file = System.IO.Path.GetFileName(target);
+        if (file.Length > 0 && SystemTools.Contains(file, StringComparer.OrdinalIgnoreCase)) return true;
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        return !string.IsNullOrEmpty(windows) && target.StartsWith(windows, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
