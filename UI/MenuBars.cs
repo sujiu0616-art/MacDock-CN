@@ -91,6 +91,9 @@ internal sealed class MenuBars : IDisposable
         Log.Info($"Menu bar on {_bars.Count} displays");
     }
 
+    /// <summary>全屏应用在前：菜单栏整条收起（macOS 也是这样）。</summary>
+    public void SetFullscreen(bool fullscreen) => _bars.ForEach(b => b.SetFullscreen(fullscreen));
+
     public void ApplyTheme() => _bars.ForEach(b => b.ApplyTheme());
 
     /// <summary>Back from sleep, lock or a user switch: everything may be stale.</summary>

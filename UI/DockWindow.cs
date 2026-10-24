@@ -220,6 +220,8 @@ internal sealed class DockWindow : Window
         _displayName = _chosenDisplay = config.Settings.Display;
         _displayCheck.Tick += (_, _) =>
         {
+            // 任务栏被隐藏后 Explorer 不再可靠地发 ABN_FULLSCREENAPP：自己看一眼前台窗口。
+            if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
             _displayCheck.Stop();
             CheckDisplays();
         };
@@ -1963,8 +1965,19 @@ internal sealed class DockWindow : Window
     {
         // Explorer tells every app bar, whatever monitor the app is on (and sometimes reports the desktop).
         if (fullscreen && !Displays.IsFullscreenAppOn(_hwnd)) return;
+        SetFullscreen(fullscreen);
+    }
+
+    /// <summary>
+    /// 收起 / 放回 Dock 与菜单栏。macOS 在有全屏应用时也是把这两条都收起来。
+    /// 由 Explorer 的 ABN_FULLSCREENAPP 或我们自己的检测（见 <see cref="DetectFullscreenApp"/>）驱动 ——
+    /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
+    /// </summary>
+    void SetFullscreen(bool fullscreen)
+    {
         if (_fullscreen == fullscreen) return;
         _fullscreen = fullscreen;
+        _menuBars?.SetFullscreen(fullscreen);
 
         if (fullscreen)
         {
@@ -1977,6 +1990,25 @@ internal sealed class DockWindow : Window
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             UpdateFrame();
         }
+    }
+
+    /// <summary>前台窗口是否盖住了整块屏（含我们 app bar 那条）= 无边框全屏 / 全屏游戏。</summary>
+    bool DetectFullscreenApp()
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return false;
+        if (IsIconic(foreground)) return false;
+        var className = GetClassName(foreground);
+        // 桌面、任务栏本身不算；我们自己的窗口（菜单栏、启动台）也不算。
+        if (className is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return false;
+        GetWindowThreadProcessId(foreground, out uint pid);
+        if (pid == Environment.ProcessId) return false;
+
+        if (!GetWindowRect(foreground, out var rect)) return false;
+        var bounds = CurrentDisplay().Bounds;
+        const int tolerance = 2;
+        return rect.Left <= bounds.Left + tolerance && rect.Top <= bounds.Top + tolerance
+               && rect.Right >= bounds.Right - tolerance && rect.Bottom >= bounds.Bottom - tolerance;
     }
 
     void ApplyTheme()

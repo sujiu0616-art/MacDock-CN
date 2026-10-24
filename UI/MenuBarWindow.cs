@@ -284,9 +284,9 @@ internal sealed class MenuBarWindow : Window
     }
 
     /// <summary>Step aside while a full-screen app (video, game, presentation) is in front on this monitor.</summary>
-    void OnFullscreenApp(bool fullscreen)
+    /// <summary>由 Dock 的全屏检测统一驱动（不依赖 Explorer 的 ABN_FULLSCREENAPP）。</summary>
+    public void SetFullscreen(bool fullscreen)
     {
-        if (fullscreen && !Displays.IsFullscreenAppOn(_hwnd)) return;
         if (_fullscreen == fullscreen) return;
         _fullscreen = fullscreen;
         if (fullscreen)
@@ -299,7 +299,18 @@ internal sealed class MenuBarWindow : Window
             _glass.SetVisible(true);
             ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SchedulePlace();
         }
+    }
+
+    void OnFullscreenApp(bool fullscreen)
+    {
+        if (fullscreen && !Displays.IsFullscreenAppOn(_hwnd)) return;
+        SetFullscreen(fullscreen);
+    }
+
+    void UnusedFullscreenBody(bool fullscreen)
+    {
     }
 
     // ───────────────────────── Content ─────────────────────────
