@@ -1315,7 +1315,8 @@ internal sealed class DockWindow : Window
             return;
         }
         if (string.IsNullOrEmpty(item.Target)) return;
-        Launcher.Launch(item);
+        // 后台线程启动：点击立刻返回，弹跳动画不会被 Process.Start / shell 解析卡住。
+        System.Threading.Tasks.Task.Run(() => Launcher.Launch(item));
         if (!item.IsRunning) item.Bounce.Start(BounceKind.Launch, Now);
         EnsureAnimating();
     }

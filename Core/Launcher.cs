@@ -15,6 +15,12 @@ internal static class Launcher
     static bool IsWindowsTerminal(DockItem item) =>
         item.Target.Contains("Microsoft.WindowsTerminal", StringComparison.OrdinalIgnoreCase);
 
+    const uint ASFW_ANY = 0xFFFFFFFF;
+    const int ASFW_ANY_PID = -1;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool AllowSetForegroundWindow(uint processId);
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct SHELLEXECUTEINFO
     {
@@ -83,17 +89,31 @@ internal static class Launcher
         try
         {
             var target = Environment.ExpandEnvironmentVariables(item.Target);
+            // 让新进程有权把自己切到前台：否则它常被前台锁挡在别的窗口后面，看上去像"点了没反应"。
+            try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { /* 非关键路径 */ }
+
             ProcessStartInfo psi;
+            var dir = File.Exists(target) ? Path.GetDirectoryName(target) : null;
             if (target.StartsWith("shell:", StringComparison.OrdinalIgnoreCase) || ShellItems.IsVirtual(target))
             {
                 // Packaged apps and shell folders open reliably through Explorer.
                 psi = new ProcessStartInfo("explorer.exe", target) { UseShellExecute = true };
             }
+            else if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(target))
+            {
+                // 普通 exe 直接 CreateProcess：比绕 shell 快，也不会触发 shell 的额外检查。
+                psi = new ProcessStartInfo(target)
+                {
+                    UseShellExecute = false,
+                    Arguments = item.Config.Arguments ?? "",
+                };
+                if (!string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
+            }
             else
             {
+                // .lnk / .url / 其它：交给 shell 解析（它才知道快捷方式指向谁）。
                 psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = item.Config.Arguments ?? "" };
-                var dir = Path.GetDirectoryName(target);
-                if (File.Exists(target) && !string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
+                if (!string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
             }
             Process.Start(psi)?.Dispose();
         }
