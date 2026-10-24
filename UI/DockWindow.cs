@@ -651,12 +651,9 @@ internal sealed class DockWindow : Window
         double dot = _m.DotSize;
         double dotV = _m.EdgeGap + (_m.Pad - dot) / 2 - slide;
 
-        // The plate grows with the tallest icon, as the Dock's does: a magnified icon that pokes out
-        // of the glass is the one thing that never happens on a Mac.
-        double tallest = _m.IconSize;
-        for (int i = 0; i < _entries.Count && i < _layout.Sizes.Length; i++)
-            if (_entries[i].Kind == DockItemKind.App) tallest = Math.Max(tallest, _layout.Sizes[i]);
-        _plateThickness = Math.Max(_m.PlateThickness, 2 * _m.Pad + tallest);
+        // 板高恒定：app bar 预留的就是这个高度，跟着图标长高就会压到上方窗口（用户报的"一点点重叠"）。
+        // 放大时图标往玻璃板上方探出来 —— 这才是 macOS 的样子。
+        _plateThickness = _m.PlateThickness;
 
         for (int i = 0; i < _entries.Count; i++)
         {
