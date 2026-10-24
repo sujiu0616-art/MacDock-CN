@@ -36,7 +36,6 @@ internal sealed class SettingsWindow : Window
         panel.Children.Add(SliderRow(Loc.T("Icon size"), 24, 96, _settings.IconSize, v => _settings.IconSize = v));
         panel.Children.Add(Check(Loc.T("Magnify icons under the pointer"), _settings.Magnification, v => _settings.Magnification = v));
         panel.Children.Add(SliderRow(Loc.T("Magnified size"), 48, 160, _settings.MagnifiedSize, v => _settings.MagnifiedSize = v));
-        panel.Children.Add(Check(Loc.T("Genie effect when minimizing and restoring"), _settings.Genie, v => _settings.Genie = v));
 
         panel.Children.Add(Heading(Loc.T("Position")));
         panel.Children.Add(EdgeRow());

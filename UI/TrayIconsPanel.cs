@@ -86,14 +86,32 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
                 view.ToolTip = Tip(icon);
                 break;
             case nameof(NotifyIcon.IsHidden):
-                Sync();
+                // 某些程序会把图标反复隐藏/显示（比如播放器的"仅在有提示时出现"）：合成一次重建，
+                // 别每次属性变化都 Children.Clear() 整排重来 —— 那是空闲 CPU 的大头。
+                ScheduleSync();
                 break;
         }
     }
 
+    bool _syncPending;
+
+    void ScheduleSync()
+    {
+        if (_syncPending) return;
+        _syncPending = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _syncPending = false;
+            Sync();
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
     /// <summary>Brings the row of views in line with the tray's icons, keeping existing views (and their hover state).</summary>
+    internal static int DiagSyncs;
+
     void Sync()
     {
+        DiagSyncs++;
         var wanted = _area.TrayIcons.Where(i => !i.IsHidden && !SystemIcons.Contains(i.GUID)).ToList();
 
         // Hidden icons stay subscribed: they can be shown again (NIS_HIDDEN cleared).
@@ -105,6 +123,21 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             _subscribed.Remove(gone);
         }
         foreach (var gone in _views.Keys.Where(i => !wanted.Contains(i)).ToList()) _views.Remove(gone);
+
+        // 顺序/数量没变就别动视觉树：Children.Clear() + 重建会触发一整轮布局与合成。
+        if (Children.Count == wanted.Count)
+        {
+            bool same = true;
+            for (int i = 0; i < wanted.Count; i++)
+            {
+                if (!_views.TryGetValue(wanted[i], out var existing) || !ReferenceEquals(Children[i], existing))
+                {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) return;
+        }
 
         Children.Clear();
         foreach (var icon in wanted)

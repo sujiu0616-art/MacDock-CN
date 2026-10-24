@@ -15,7 +15,8 @@ internal enum NetworkKind { None, Ethernet, Wifi }
 /// </summary>
 internal sealed class SystemStatus : IDisposable
 {
-    readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
+    // 3 秒够用：音量/电量这种变化没人会盯着 1 秒的分辨率，省下来的是每秒一次 COM 激活。
+    readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(3) };
     readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     IMMDeviceEnumerator? _audio;
     Guid? _wifiInterface;
@@ -103,32 +104,43 @@ internal sealed class SystemStatus : IDisposable
         if (before != (Volume, Muted, WifiSignal, HasBattery, BatteryPercent, Charging)) Changed?.Invoke();
     }
 
+    IAudioEndpointVolume? _volume;
+
     void ReadVolume()
     {
-        IMMDevice? device = null;
-        object? endpoint = null;
         try
         {
-            // The default device changes (headphones plugged in), so it is looked up every time.
-            if (_audio is null || _audio.GetDefaultAudioEndpoint(eRender, eMultimedia, out device) != 0)
+            if (_volume is null)
             {
-                Volume = null;
-                return;
+                IMMDevice? device = null;
+                object? endpoint = null;
+                try
+                {
+                    if (_audio is null || _audio.GetDefaultAudioEndpoint(eRender, eMultimedia, out device) != 0)
+                    {
+                        Volume = null;
+                        return;
+                    }
+                    var iid = typeof(IAudioEndpointVolume).GUID;
+                    if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out endpoint) != 0) return;
+                    _volume = (IAudioEndpointVolume)endpoint;
+                    endpoint = null; // 所有权交给缓存，别在 finally 里释放
+                }
+                finally
+                {
+                    if (endpoint is not null) Marshal.ReleaseComObject(endpoint);
+                    if (device is not null) Marshal.ReleaseComObject(device);
+                }
             }
-            var iid = typeof(IAudioEndpointVolume).GUID;
-            if (device.Activate(ref iid, CLSCTX_ALL, IntPtr.Zero, out endpoint) != 0) return;
-            var volume = (IAudioEndpointVolume)endpoint;
-            if (volume.GetMasterVolumeLevelScalar(out float level) == 0) Volume = level;
-            if (volume.GetMute(out bool muted) == 0) Muted = muted;
+
+            if (_volume.GetMasterVolumeLevelScalar(out float level) == 0) Volume = level;
+            if (_volume.GetMute(out bool muted) == 0) Muted = muted;
         }
         catch (Exception)
         {
+            // 端点失效（换设备、休眠回来）：丢掉缓存，下次重建
+            _volume = null;
             Volume = null;
-        }
-        finally
-        {
-            if (endpoint is not null) Marshal.ReleaseComObject(endpoint);
-            if (device is not null) Marshal.ReleaseComObject(device);
         }
     }
 

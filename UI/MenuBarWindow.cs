@@ -209,8 +209,12 @@ internal sealed class MenuBarWindow : Window
         });
     }
 
+    internal static int DiagPlaces;
+    internal static int DiagPosChanged;
+
     void Place()
     {
+        DiagPlaces++;
         if (_hwnd == IntPtr.Zero || _appBar is null) return;
         var display = Displays.All().FirstOrDefault(d => string.Equals(d.DeviceName, _device, StringComparison.OrdinalIgnoreCase));
         if (display.Handle == IntPtr.Zero) return; // unplugged: MenuBars closes this bar
@@ -268,6 +272,7 @@ internal sealed class MenuBarWindow : Window
             switch ((int)wParam)
             {
                 case ABN_POSCHANGED:
+                    DiagPosChanged++;
                     SchedulePlace();
                     break;
                 case ABN_FULLSCREENAPP:

@@ -48,6 +48,7 @@ internal sealed class MenuBars : IDisposable
         UpdateActiveApp(GetForegroundWindow());
         Sync();
         UpdateClock();
+        if (Environment.GetCommandLineArgs().Contains("--diag")) StartDiagnostics();
     }
 
     public string AppName { get; private set; }
@@ -104,6 +105,20 @@ internal sealed class MenuBars : IDisposable
 
     /// <summary>Screen off or session locked: nobody sees the status icons, stop polling them.</summary>
     public void SetPaused(bool paused) => _status.SetPaused(paused);
+
+    readonly System.Windows.Threading.DispatcherTimer _diagTimer = new() { Interval = TimeSpan.FromSeconds(5) };
+    int _lastPlaces, _lastPos, _lastSyncs;
+
+    void StartDiagnostics()
+    {
+        _diagTimer.Tick += (_, _) =>
+        {
+            int places = MenuBarWindow.DiagPlaces, pos = MenuBarWindow.DiagPosChanged, syncs = TrayIconsPanel.DiagSyncs;
+            Log.Info($"DIAGPERF 5s: place={places - _lastPlaces} poschanged={pos - _lastPos} traySync={syncs - _lastSyncs} bars={_bars.Count}");
+            _lastPlaces = places; _lastPos = pos; _lastSyncs = syncs;
+        };
+        _diagTimer.Start();
+    }
 
     public void UpdateClock()
     {

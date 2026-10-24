@@ -419,12 +419,20 @@ internal sealed class LaunchpadWindow : Window
     /// <summary>玻璃先亮起来（DWM 亚克力在底下），内容窗口紧跟着带缩放进场。</summary>
     void ShowLaunchpad()
     {
+        _openedAt = DateTime.UtcNow;
+        // 先让 Dock 收起来，再抓屏：否则模糊背景里会多一块 Dock 的影子。
+        OpenChanged?.Invoke(true);
+        // 抓屏要等 Dock 真的隐藏那一帧，所以放到 Render 优先级之后做。
+        Dispatcher.BeginInvoke(new Action(ShowWithBackdrop), System.Windows.Threading.DispatcherPriority.Render);
+    }
+
+    /// <summary>抓一帧屏幕、模糊一次作为玻璃背景（macOS 那种 vibrancy），然后把两扇窗显示出来。</summary>
+    void ShowWithBackdrop()
+    {
         try
         {
-            _openedAt = DateTime.UtcNow;
-            // 玻璃与内容窗口用同一个矩形：内容窗口铺到屏幕边缘（只让开菜单栏），玻璃跟着走，
-            // 否则底部会露出没模糊的一条。
             var rect = ScreenRect();
+            _glass.SetBackdrop(ScreenFrost.Capture(rect, divisor: 4, blurRadius: 18));
             _glass.Show();
             _glass.SetBounds(rect);
             _glass.FadeIn(EntranceMs);
@@ -695,11 +703,7 @@ internal sealed class LaunchpadWindow : Window
                 MaxHeight = 48, // 两行 13 DIU 的正文，留出下伸部（不然 "Tools" 会被切掉半截）
             };
             TextOptions.SetTextFormattingMode(_label, TextFormattingMode.Display);
-            // 没有底了，用一层柔阴影顶住：亮壁纸上白字也能读。
-            _label.Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Colors.Black, BlurRadius = 8, ShadowDepth = 1, Opacity = 0.55, RenderingBias = System.Windows.Media.Effects.RenderingBias.Performance,
-            };
+            // 不再给每个标签加 DropShadowEffect：28 个/页 × 软件光栅化，翻页时最贵的一笔。
 
             _bubble = new Border
             {
@@ -774,14 +778,24 @@ internal sealed class LaunchpadWindow : Window
 internal sealed class LaunchpadGlass : AcrylicWindow
 {
     readonly Border _tint;
-    readonly Image _surface;
-    readonly Grid _layers;
+    readonly Image _veil = new() { Stretch = Stretch.Fill };
+    readonly Grid _layers = new() { ClipToBounds = true };
 
     public LaunchpadGlass() : base(rounded: false)
     {
         Title = "MacDock Launchpad Glass";
-        _layers = WallpaperFrost.Build(out _surface, out _tint, 26);
+        // 打开前抓的一张屏幕 + 模糊一次（macOS 那种 vibrancy）：背后是真实桌面，零持续开销。
+        _tint = new Border();
+        _layers.Children.Add(_veil);
+        _layers.Children.Add(_tint);
         Content = _layers;
+    }
+
+    /// <summary>设置"打开前那一帧屏幕"的模糊版；null 表示没抓到，退回纯半透明。</summary>
+    public void SetBackdrop(ImageSource? blurred)
+    {
+        _veil.Source = blurred;
+        _veil.Visibility = blurred is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -790,19 +804,6 @@ internal sealed class LaunchpadGlass : AcrylicWindow
         // Same wallpaper frost as the menu bar: the OS blur on this build is nearly opaque, and a
         // launchpad that hides the desktop entirely is exactly what macOS does not do.
         UseAccentBlur();
-        RefreshSurface(GlassBounds);
-    }
-
-    protected override void OnBoundsChanged(RECT bounds) => RefreshSurface(bounds);
-
-    void RefreshSurface(RECT bounds)
-    {
-        if (bounds.Width <= 0 || bounds.Height <= 0) return;
-        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
-        var brush = WallpaperFrost.BrushFor(bounds, display, out _);
-        _surface.Source = brush?.ImageSource;
-        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
-        _tint.Background = new SolidColorBrush(Tint(1));
     }
 
     public override void ApplyTheme()
@@ -827,7 +828,7 @@ internal sealed class LaunchpadGlass : AcrylicWindow
     /// <summary>How dark the veil is: macOS keeps the desktop readable through Launchpad, so this is a
     /// thin tint over the blur rather than the near-black sheet it used to be.</summary>
     static Color Tint(double alpha) => Theme.IsDark
-        ? Color.FromArgb((byte)Math.Round(alpha * 0x73), 0x0A, 0x0A, 0x0E)   // 45%: 白字要底
+        ? Color.FromArgb((byte)Math.Round(alpha * 0x73), 0x0A, 0x0A, 0x0E)   // 45%：白字要底，同时还能看见桌面
         : Color.FromArgb((byte)Math.Round(alpha * 0x40), 0xF4, 0xF4, 0xF6);  // 25%
 }
 

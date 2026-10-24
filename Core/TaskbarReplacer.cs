@@ -29,7 +29,7 @@ internal sealed class TaskbarReplacer : IDisposable
         Enabled = enabled;
         _winEventProc = OnWinEvent;
         // Safety net for shows the event hook misses (and for a guard that died).
-        _enforceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _enforceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _enforceTimer.Tick += (_, _) => Enforce();
     }
 

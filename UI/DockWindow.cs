@@ -50,7 +50,7 @@ internal sealed class DockWindow : Window
         IsHitTestVisible = false,
         Visibility = Visibility.Collapsed,
         BorderThickness = new Thickness(PlateShadowBand),
-        Effect = new BlurEffect { Radius = 9, RenderingBias = RenderingBias.Performance },
+        // 原来这里挂 BlurEffect（软件光栅化，每帧重算）。改用纯半透明深色带：肉眼几乎无差，成本归零。
     };
     readonly Border _plateRim = new()
     {
@@ -94,7 +94,6 @@ internal sealed class DockWindow : Window
     MenuBars? _menuBars;
     IntPtr _hwnd;
     uint _taskbarCreatedMessage;
-    uint _genieTestMessage;
     uint _quitMessage;
     uint _explorerPid;
     RECT _windowPx;
@@ -105,7 +104,7 @@ internal sealed class DockWindow : Window
     string _chosenDisplay;
     IntPtr _placedMonitor;
     string _displayLayout = "";
-    readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
@@ -186,7 +185,7 @@ internal sealed class DockWindow : Window
             Child = _labelText,
             IsHitTestVisible = false,
             Visibility = Visibility.Collapsed,
-            Effect = new DropShadowEffect { BlurRadius = 10, ShadowDepth = 1, Opacity = 0.25, Direction = 270 },
+            // 不再给气泡加 DropShadowEffect：这些效果在 WPF 里是软件光栅化，放大动画时每帧都要重算。
         };
         Panel.SetZIndex(_label, 1000);
 
@@ -225,7 +224,7 @@ internal sealed class DockWindow : Window
             CheckDisplays();
         };
         _followTimer.Tick += (_, _) => FollowPointer();
-        _shellGuard.Interval = TimeSpan.FromSeconds(2);
+        _shellGuard.Interval = TimeSpan.FromSeconds(5);
         _shellGuard.Tick += (_, _) => EnsureShellVisible();
         _settleTimer.Tick += (_, _) =>
         {
@@ -262,7 +261,6 @@ internal sealed class DockWindow : Window
         MakeToolWindow(_hwnd);
         HwndSource.FromHwnd(_hwnd)!.AddHook(WndProc);
         _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
-        _genieTestMessage = RegisterWindowMessage("MacDock.GenieTest");
         _quitMessage = RegisterWindowMessage(CommandLine.QuitMessageName);
 
         // The menu bar first: its tray service (ManagedShell) has to hook Explorer's notification
@@ -415,15 +413,19 @@ internal sealed class DockWindow : Window
         if (_hwnd == IntPtr.Zero || _launchpadOpen) return;
         try
         {
-            if (!IsWindowVisible(_hwnd))
+            bool hidden = !IsWindowVisible(_hwnd);
+            if (hidden)
             {
                 ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
                 SchedulePlace();
                 Log.Info("Dock was hidden by something else: shown again");
             }
+            // 每次强行 SetWindowPos 都会让分层窗口重组一遍（空闲 CPU 直接上去），只在丢了 topmost 时才重申。
+            long ex = (long)GetWindowLongPtr(_hwnd, GWL_EXSTYLE);
+            if (((long)ex & WS_EX_TOPMOST) == 0)
+                SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
             if (_backdrop is not null && !IsWindowVisible(_backdrop.Handle)) _backdrop.SetVisible(true);
-            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         }
         catch (Exception ex)
         {
@@ -479,7 +481,6 @@ internal sealed class DockWindow : Window
     {
         if (_tracker is null) return;
         foreach (var item in _pinned.Concat(_running)) item.Windows.Clear();
-        PruneGenieCache();
 
         foreach (var window in _tracker.Windows.OrderByDescending(w => w.LastActivated))
         {
@@ -517,154 +518,6 @@ internal sealed class DockWindow : Window
         return new RECT(
             _windowPx.Left + (int)Math.Round(r.Left * _scale), _windowPx.Top + (int)Math.Round(r.Top * _scale),
             _windowPx.Left + (int)Math.Round(r.Right * _scale), _windowPx.Top + (int)Math.Round(r.Bottom * _scale));
-    }
-
-    // ───────────────────────── Genie effect ─────────────────────────
-
-    readonly Dictionary<IntPtr, GenieCapture> _genieCache = [];   // a minimized window as it looked, for the way back
-    readonly List<IntPtr> _genieOrder = [];
-    GenieAnimation? _genie;
-    const int GenieCacheMax = 5;                                   // a full-screen capture is ~8 MB
-
-    static void SetTransitions(IntPtr hwnd, bool disabled)
-    {
-        int value = disabled ? 1 : 0;
-        DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, ref value, sizeof(int));
-    }
-
-    /// <summary>Minimizes a window: flowing into its dock icon, or the plain way when that cannot be shown.</summary>
-    void MinimizeWindow(IntPtr hwnd)
-    {
-        if (!TryGenieMinimize(hwnd)) WindowActions.Minimize(hwnd);
-    }
-
-    /// <summary>Why the genie was skipped for a window, in the log (null = it plays).</summary>
-    string? GenieBlocker(IntPtr hwnd)
-    {
-        if (!_config.Settings.Genie) return "turned off in settings";
-        if (_genie is not null) return "another animation is running";
-        if (_fullscreen) return "full-screen app";
-        if (_pauseReasons.Count > 0) return "Dock paused";
-        if (_hide >= 0.02) return "Dock hidden";
-        if (!GenieRenderer.Instance.Available) return "graphics card not usable";
-        if (MinimizeTargetFor(hwnd) is null) return "icon not found in the Dock";
-        return null;
-    }
-
-    void LogGenieSkipped(IntPtr hwnd, string action, string why)
-    {
-        GetWindowThreadProcessId(hwnd, out uint pid);
-        string name;
-        try
-        {
-            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
-            name = p.ProcessName;
-        }
-        catch (Exception)
-        {
-            name = pid.ToString();
-        }
-        Log.Info($"Genie skipped ({action} of {name}): {why}");
-    }
-
-    bool TryGenieMinimize(IntPtr hwnd)
-    {
-        if (GenieBlocker(hwnd) is { } blocked)
-        {
-            LogGenieSkipped(hwnd, "minimize", blocked);
-            return false;
-        }
-        if (IsIconic(hwnd) || !IsWindowVisible(hwnd) || IsCloaked(hwnd))
-        {
-            LogGenieSkipped(hwnd, "minimize", "window already minimized, hidden or on another desktop");
-            return false;
-        }
-        var target = MinimizeTargetFor(hwnd)!.Value;
-        var capture = GenieCapture.From(hwnd);
-        if (capture is null)
-        {
-            LogGenieSkipped(hwnd, "minimize", GenieCapture.LastFailure);
-            return false;
-        }
-
-        RememberCapture(hwnd, capture);
-        SetTransitions(hwnd, true); // Windows' own shrinking would play under ours
-        var animation = new GenieAnimation(capture, target, Edge, expand: false,
-            started: () => WindowActions.Minimize(hwnd),
-            finished: () => { },
-            durationMs: 520, lingerMs: 0);
-        animation.Ended += () =>
-        {
-            SetTransitions(hwnd, false);
-            _genie = null;
-            // A window that would not minimize is simply still there.
-            if (!IsIconic(hwnd)) _genieCache.Remove(hwnd);
-        };
-        _genie = animation;
-        if (animation.Start(_hwnd)) return true;
-        _genie = null;
-        SetTransitions(hwnd, false);
-        return false;
-    }
-
-    /// <summary>Brings a window forward; a minimized one grows out of its dock icon.</summary>
-    void ActivateWindow(IntPtr hwnd)
-    {
-        if (!(IsIconic(hwnd) && TryGenieRestore(hwnd))) WindowActions.Activate(hwnd);
-    }
-
-    bool TryGenieRestore(IntPtr hwnd)
-    {
-        if (GenieBlocker(hwnd) is { } blocked)
-        {
-            LogGenieSkipped(hwnd, "restore", blocked);
-            return false;
-        }
-        if (!_genieCache.TryGetValue(hwnd, out var capture))
-        {
-            LogGenieSkipped(hwnd, "restore", "no captured image: the window was not minimized from the Dock");
-            return false;
-        }
-        var target = MinimizeTargetFor(hwnd)!.Value;
-
-        SetTransitions(hwnd, true);
-        var animation = new GenieAnimation(capture, target, Edge, expand: true,
-            started: null,
-            finished: () => WindowActions.Activate(hwnd),
-            durationMs: 460, lingerMs: 140);
-        animation.Ended += () =>
-        {
-            SetTransitions(hwnd, false);
-            _genieCache.Remove(hwnd);
-            _genieOrder.Remove(hwnd);
-            _genie = null;
-        };
-        _genie = animation;
-        if (animation.Start(_hwnd)) return true;
-        _genie = null;
-        SetTransitions(hwnd, false);
-        return false;
-    }
-
-    void RememberCapture(IntPtr hwnd, GenieCapture capture)
-    {
-        _genieCache[hwnd] = capture;
-        _genieOrder.Remove(hwnd);
-        _genieOrder.Add(hwnd);
-        while (_genieOrder.Count > GenieCacheMax)
-        {
-            _genieCache.Remove(_genieOrder[0]);
-            _genieOrder.RemoveAt(0);
-        }
-    }
-
-    void PruneGenieCache()
-    {
-        foreach (var hwnd in _genieOrder.Where(h => !IsWindow(h) || !IsIconic(h)).ToList())
-        {
-            _genieCache.Remove(hwnd);
-            _genieOrder.Remove(hwnd);
-        }
     }
 
     void OnWindowActivated(TrackedWindow window)
@@ -1448,6 +1301,9 @@ internal sealed class DockWindow : Window
         else ActivateWindow(windows[^1].Handle);
     }
 
+    // genie 动画删掉之后，最小化/激活回到最直接的两条路。
+    void MinimizeWindow(IntPtr hwnd) => WindowActions.Minimize(hwnd);
+    void ActivateWindow(IntPtr hwnd) => WindowActions.Activate(hwnd);
     void Launch(DockItem item)
     {
         if (item.IsStart)
@@ -2082,13 +1938,7 @@ internal sealed class DockWindow : Window
             Dispatcher.BeginInvoke(() => Application.Current.Shutdown());
             handled = true;
         }
-        else if (WindowTracker.Diagnostics && msg == _genieTestMessage && _genieTestMessage != 0)
-        {
-            // Test hook (--diag only): wParam 0 minimizes the window in lParam as a dock click would, 1 restores it.
-            if (wParam == IntPtr.Zero) MinimizeWindow(lParam);
-            else ActivateWindow(lParam);
-            handled = true;
-        }
+
         else if (_appBar is not null && msg == _appBar.CallbackMessage)
         {
             switch ((int)wParam)

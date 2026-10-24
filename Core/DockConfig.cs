@@ -32,8 +32,8 @@ internal sealed class DockSettings
     /// <summary>Interface language: "" follows Windows, otherwise "en" or "it".</summary>
     public string Language { get; set; } = "";
 
-    /// <summary>The "genie" effect: windows flow into their dock icon when minimized and out of it when restored.</summary>
-    public bool Genie { get; set; } = true;
+    /// <summary>旧版的"精灵"缩窗动画已删除：字段保留只为兼容老配置文件的解析。</summary>
+    public bool Genie { get; set; }
 
     /// <summary>A menu bar on every monitor, as on macOS (the tray icons stay on the primary one).</summary>
     public bool MenuBarOnAllDisplays { get; set; } = true;

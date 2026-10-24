@@ -204,6 +204,8 @@ internal static class TaskbarState
     /// <summary>Every taskbar window Explorer owns right now (primary and per-monitor), fresh each call.</summary>
     static List<IntPtr> ExplorerTaskbarWindows()
     {
+        // 每秒（现在是每 2 秒）都要跑一次：不能为每个窗口开 Process 对象查进程名，只比对 explorer 的 pid。
+        uint explorer = ExplorerProcessId();
         var result = new List<IntPtr>();
         foreach (var className in new[] { PrimaryClass, SecondaryClass })
         {
@@ -211,8 +213,8 @@ internal static class TaskbarState
             while ((hwnd = FindWindowEx(IntPtr.Zero, hwnd, className, null)) != IntPtr.Zero)
             {
                 GetWindowThreadProcessId(hwnd, out uint pid);
-                if (pid == Environment.ProcessId) continue; // the menu bar's tray service
-                if (IsExplorer(pid)) result.Add(hwnd);
+                if (pid == Environment.ProcessId) continue;       // the menu bar's tray service
+                if (explorer != 0 && pid == explorer) result.Add(hwnd);
             }
         }
         return result;
