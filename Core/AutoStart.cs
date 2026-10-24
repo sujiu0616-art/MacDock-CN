@@ -162,6 +162,9 @@ internal static class AutoStart
         try
         {
             string userId = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+            // Through the launcher when it exists: it is what sets DOTNET_ROOT.
+            string StartTarget = Launcher is null ? Exe : Path.Combine(Environment.SystemDirectory, "wscript.exe");
+            string StartArguments = Launcher is { } startLauncher ? $"\"{startLauncher}\" {AutoStartArg}" : AutoStartArg;
             string xml = $"""
                 <?xml version="1.0" encoding="UTF-16"?>
                 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -175,12 +178,13 @@ internal static class AutoStart
                     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
                     <Priority>4</Priority>
                   </Settings>
-                  <Actions Context="Author"><Exec><Command>{System.Security.SecurityElement.Escape(Exe)}</Command><Arguments>{AutoStartArg}</Arguments></Exec></Actions>
+                  <Actions Context="Author"><Exec><Command>{System.Security.SecurityElement.Escape(StartTarget)}</Command><Arguments>{System.Security.SecurityElement.Escape(StartArguments)}</Arguments></Exec></Actions>
                 </Task>
                 """;
-            // Already there and pointing at this copy of MacDock: nothing to do.
+            // Already there and pointing at this copy of MacDock (directly or through the launcher): nothing to do.
             var query = RunSchtasks($"/Query /TN \"{TaskName}\" /XML");
-            if (query.Code == 0 && query.Output.Contains(System.Security.SecurityElement.Escape(Exe), StringComparison.OrdinalIgnoreCase)) return;
+            string expected = System.Security.SecurityElement.Escape(Launcher ?? Exe);
+            if (query.Code == 0 && query.Output.Contains(expected, StringComparison.OrdinalIgnoreCase)) return;
 
             var file = Path.Combine(Path.GetTempPath(), "gravitone-task.xml");
             File.WriteAllText(file, xml, System.Text.Encoding.Unicode);
