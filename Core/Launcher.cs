@@ -115,7 +115,24 @@ internal static class Launcher
                 psi = new ProcessStartInfo(target) { UseShellExecute = true, Arguments = item.Config.Arguments ?? "" };
                 if (!string.IsNullOrEmpty(dir)) psi.WorkingDirectory = dir;
             }
-            Process.Start(psi)?.Dispose();
+            var started = Process.Start(psi);
+            if (started is not null)
+            {
+                // 有些客户端（Electron 那类）会在启动后立刻自己退出：留一条记录，便于区分是谁的问题。
+                var name = item.Name;
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        var deadline = DateTime.Now.AddSeconds(3);
+                        await started.WaitForExitAsync().ConfigureAwait(false);
+                        if (started.ExitCode == 0 && DateTime.Now <= deadline)
+                            Log.Info($"{name}: exited by itself right after start (exit 0)");
+                    }
+                    catch (Exception) { }
+                    finally { started.Dispose(); }
+                });
+            }
         }
         catch (Exception ex)
         {

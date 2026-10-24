@@ -1314,6 +1314,13 @@ internal sealed class DockWindow : Window
         }
 
         var windows = item.Windows; // most recently used first
+        if (windows.Count == 0)
+        {
+            // 进程在、但没有可交互窗口（缩到托盘 / 正在退出）：当作没在跑，重新启动一次。
+            Log.Info($"{item.Name}: running without a window, launching again");
+            Launch(item);
+            return;
+        }
         bool inFront = windows.Any(w => w.Handle == _foregroundAtPress);
         if (!inFront) ActivateWindow(windows[0].Handle);
         else if (windows.Count == 1) MinimizeWindow(windows[0].Handle);
