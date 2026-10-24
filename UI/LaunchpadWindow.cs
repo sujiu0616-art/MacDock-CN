@@ -420,23 +420,23 @@ internal sealed class LaunchpadWindow : Window
     void ShowLaunchpad()
     {
         _openedAt = DateTime.UtcNow;
-        // 先让 Dock 收起来，再抓屏：否则模糊背景里会多一块 Dock 的影子。
+        // 先让 Dock 收起来，抓屏里才不会有 Dock 自己的影子。
         OpenChanged?.Invoke(true);
-        // 抓屏要等 Dock 真的隐藏那一帧，所以放到 Render 优先级之后做。
-        Dispatcher.BeginInvoke(new Action(ShowWithBackdrop), System.Windows.Threading.DispatcherPriority.Render);
-    }
 
-    /// <summary>抓一帧屏幕、模糊一次作为玻璃背景（macOS 那种 vibrancy），然后把两扇窗显示出来。</summary>
-    void ShowWithBackdrop()
-    {
         try
         {
             var rect = ScreenRect();
-            _glass.SetBackdrop(ScreenFrost.Capture(rect, divisor: 4, blurRadius: 18));
+            // 先把窗口显示出来：没有任何窗口时 dispatcher 会闲下来、应用直接退出（CLI 启动就是这样）。
             _glass.Show();
             _glass.SetBounds(rect);
             _glass.FadeIn(EntranceMs);
             Show();
+            // 窗口已经在屏上了，这里可以安全地晚一拍抓屏（也能避开 Dock 收起的过渡帧）。
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try { _glass.SetBackdrop(ScreenFrost.Capture(rect, divisor: 4, blurRadius: 18)); }
+                catch (Exception ex) { Log.Error(ex, "Preparing the launchpad backdrop"); }
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
         catch (Exception ex)
         {
@@ -597,6 +597,8 @@ internal sealed class LaunchpadWindow : Window
     void ShowMenu(LaunchpadEntry entry)
     {
         var menu = new ContextMenu { Placement = PlacementMode.MousePoint, PlacementTarget = _root };
+        MenuTheme.Apply(menu);
+        MenuTheme.FadeIn(menu);
         var open = new MenuItem { Header = Loc.T("Open").Replace("_", "__") };
         open.Click += (_, _) => Launch(entry);
         var reveal = new MenuItem { Header = Loc.T("Show in File Explorer").Replace("_", "__") };

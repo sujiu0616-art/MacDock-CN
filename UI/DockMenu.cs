@@ -21,6 +21,7 @@ internal sealed class DockMenu
 
     public DockMenu()
     {
+        MenuTheme.Apply(_menu);
         _outsideClickWatch.Tick += (_, _) => CloseOnOutsideClick();
         _menu.Closed += (_, _) =>
         {
