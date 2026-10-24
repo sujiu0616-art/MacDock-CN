@@ -28,6 +28,9 @@ internal sealed class DockWindow : Window
 
     readonly DockConfig _config;
     readonly BackdropWindow _backdrop;
+
+    /// <summary>The launchpad covers the screen: the dock (and its plate) stay out of the way.</summary>
+    bool _launchpadOpen;
     readonly List<DockItem> _pinned = [];
     readonly List<DockItem> _running = [];      // open but not pinned, after the separator
     readonly List<DockItem> _folders = [];      // stacks, between the open apps and the trash
@@ -167,8 +170,8 @@ internal sealed class DockWindow : Window
 
         _labelText = new TextBlock
         {
-            FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
-            FontSize = 12,
+            FontFamily = Typo.Ui,
+            FontSize = 12.5,
         };
         _label = new Border
         {
@@ -229,6 +232,7 @@ internal sealed class DockWindow : Window
             CheckTrash();
         };
 
+        Typo.Crisp(this);
         ApplyTheme();
         DpiChanged += (_, _) => SchedulePlace();
     }
@@ -287,6 +291,9 @@ internal sealed class DockWindow : Window
         Place();
         UpdateFollowTimer();
         if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) LaunchOpenAtStartItems();
+
+        // 启动台铺满整屏时 Dock 让位（macOS 的启动台会盖住 Dock），关掉再露出来。
+        LaunchpadWindow.OpenChanged += OnLaunchpadOpenChanged;
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -336,6 +343,30 @@ internal sealed class DockWindow : Window
         }
     }
 
+    /// <summary>Launchpad covers the whole screen: step aside, and come back when it closes.</summary>
+    void OnLaunchpadOpenChanged(bool open)
+    {
+        try
+        {
+            _launchpadOpen = open;
+            if (open)
+            {
+                _backdrop?.SetVisible(false);
+                Hide();
+            }
+            else
+            {
+                Show();
+                _backdrop?.SetVisible(true);
+                SchedulePlace();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Hiding the dock for the launchpad");
+        }
+    }
+
     void ShowMenuBar()
     {
         if (_menuBars is not null) return;
@@ -372,6 +403,7 @@ internal sealed class DockWindow : Window
     void Place()
     {
         if (_hwnd == IntPtr.Zero || _appBar is null) return;
+        if (_launchpadOpen) return; // the launchpad owns the screen right now
         var settings = _config.Settings;
 
         var display = CurrentDisplay();
@@ -783,7 +815,7 @@ internal sealed class DockWindow : Window
         {
             PlacePlateEdges(Rect.Empty);
         }
-        _backdrop.SetVisible(visible);
+        _backdrop.SetVisible(visible && !_launchpadOpen);
     }
 
     /// <summary>

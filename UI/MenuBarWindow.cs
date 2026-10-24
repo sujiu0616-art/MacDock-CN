@@ -138,6 +138,7 @@ internal sealed class MenuBarWindow : Window
         DpiChanged += (_, _) => SchedulePlace();
 
         Place();
+        Typo.Crisp(this);
         _glass.BrightnessChanged += _ => ApplyForeground();
         ApplyTheme();
         ShowAppName(_owner.AppName);
@@ -343,7 +344,7 @@ internal sealed class MenuBarWindow : Window
         var t = new TextBlock
         {
             Text = text,
-            FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
+            FontFamily = Typo.Ui,
             FontSize = size,
             FontWeight = weight,
         };
@@ -355,7 +356,7 @@ internal sealed class MenuBarWindow : Window
     TextBlock Glyph(string glyph)
     {
         var t = Text(glyph, 16, FontWeights.Normal); // macOS menu extras are 16 DIU
-        t.FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets");
+        t.FontFamily = Typo.Icons;
         t.VerticalAlignment = VerticalAlignment.Center;
         return t;
     }

@@ -34,8 +34,8 @@ internal sealed class LaunchpadWindow : Window
     const int ExitMs = 130;
 
 
-    static readonly FontFamily Font = new("Segoe UI Variable Text, Segoe UI");
-    static readonly FontFamily IconFont = new("Segoe Fluent Icons, Segoe MDL2 Assets");
+    static readonly FontFamily Font = Typo.Ui;
+    static readonly FontFamily IconFont = Typo.Icons;
 
     static readonly Brush DarkText = Frozen(0xF5, 0xF5, 0xF7);
     static readonly Brush LightText = Frozen(0x1D, 0x1D, 0x1F);
@@ -59,6 +59,9 @@ internal sealed class LaunchpadWindow : Window
     static readonly Brush LightFieldBorder = Frozen(0x00, 0x00, 0x00, 0x33);
 
     static LaunchpadWindow? _open;
+
+    /// <summary>True while the launchpad covers the screen: the dock hides itself, as on macOS.</summary>
+    public static event Action<bool>? OpenChanged;
 
     readonly LaunchpadGlass _glass = new();
     readonly Display _display;
@@ -85,11 +88,13 @@ internal sealed class LaunchpadWindow : Window
     IntPtr _hwnd;
     bool _scanning = true;
     bool _shown;
+    DateTime _openedAt;   // 点空白关闭的宽限期起点（见 backdrop 的点击处理）
     bool _closing;
 
     LaunchpadWindow()
     {
-        bool dark = Theme.IsDark;
+        // 壁纸很亮时玻璃也是亮的：这时用浅色一套（深字），否则白字会糊在玻璃里。
+        bool dark = Theme.IsDark && WallpaperAt(GetCursorPos(out var probe) ? Displays.FromPoint(probe) : Displays.Primary()) <= 140;
         _text = dark ? DarkText : LightText;
         _subtle = dark ? DarkSubtle : LightSubtle;
         _tileHover = dark ? DarkHover : LightHover;
@@ -107,6 +112,7 @@ internal sealed class LaunchpadWindow : Window
             (workWidth - 96) / (LaunchpadModel.Columns * CellWidth),
             (workHeight - 220) / (LaunchpadModel.Rows * CellHeight)));
 
+        Typo.Crisp(this);
         Title = "MacDock Launchpad";
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;                 // 半透明的图标、文字、搜索框
@@ -210,6 +216,8 @@ internal sealed class LaunchpadWindow : Window
         backdrop.MouseLeftButtonDown += (_, args) =>
         {
             args.Handled = true;
+            // 从 Dock 图标点开时，这次点击的落点会落到刚出现的启动台上：宽限期内不当作"点空白"。
+            if ((DateTime.UtcNow - _openedAt).TotalMilliseconds < 400) return;
             Close();
         };
         Grid.SetRowSpan(backdrop, 3);
@@ -235,6 +243,13 @@ internal sealed class LaunchpadWindow : Window
     }
 
     /// <summary>打开启动台（Dock 以后的入口）：同时只许有一个。</summary>
+    /// <summary>Average brightness of the wallpaper on that monitor (0-255); decides the palette.</summary>
+    static double WallpaperAt(Display display)
+    {
+        WallpaperFrost.BrushFor(display.Bounds, display, out double luminance);
+        return luminance;
+    }
+
     public static LaunchpadWindow Open()
     {
         if (_open is { } existing)
@@ -244,9 +259,11 @@ internal sealed class LaunchpadWindow : Window
         }
         var window = new LaunchpadWindow();
         _open = window;
+        OpenChanged?.Invoke(true);
         window.Closed += (_, _) =>
         {
             if (ReferenceEquals(_open, window)) _open = null;
+            OpenChanged?.Invoke(false);
         };
         return window;
     }
@@ -277,11 +294,27 @@ internal sealed class LaunchpadWindow : Window
     }
 
     /// <summary>铺满当前显示器的工作区，尺寸用物理像素给，免得跟着启动时的 DPI 走偏。</summary>
+    /// <summary>整块屏，只让开顶部那条菜单栏（Dock 那条带也要盖住）。</summary>
+    RECT ScreenRect()
+    {
+        var bounds = _display.Bounds;
+        int menuBar = (int)Math.Round(26 * _display.Scale);
+        return new RECT
+        {
+            Left = bounds.Left,
+            Top = bounds.Top + menuBar,
+            Right = bounds.Right,
+            Bottom = bounds.Bottom,
+        };
+    }
+
     void Place()
     {
         if (_hwnd == IntPtr.Zero) return;
-        var work = _display.Work;
-        SetWindowPos(_hwnd, HWND_TOPMOST, work.Left, work.Top, work.Width, work.Height, SWP_NOACTIVATE);
+        // 铺满整块屏，只给顶部菜单栏留出那条 26 DIU：Dock 那条带也要盖住（Dock 此时已隐藏），
+        // 否则启动台底下会露出一条没模糊的桌面。
+        var rect = ScreenRect();
+        SetWindowPos(_hwnd, HWND_TOPMOST, rect.Left, rect.Top, rect.Width, rect.Height, SWP_NOACTIVATE);
     }
 
     protected override void OnContentRendered(EventArgs e)
@@ -386,8 +419,12 @@ internal sealed class LaunchpadWindow : Window
     {
         try
         {
+            _openedAt = DateTime.UtcNow;
+            // 玻璃与内容窗口用同一个矩形：内容窗口铺到屏幕边缘（只让开菜单栏），玻璃跟着走，
+            // 否则底部会露出没模糊的一条。
+            var rect = ScreenRect();
             _glass.Show();
-            _glass.SetBounds(_display.Work);
+            _glass.SetBounds(rect);
             _glass.FadeIn(EntranceMs);
             Show();
         }
@@ -642,11 +679,14 @@ internal sealed class LaunchpadWindow : Window
                 Text = entry.Name,
                 Foreground = owner._text,
                 FontFamily = Font,
-                FontSize = 12,
+                FontSize = 13,
                 TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.NoWrap,
+                TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = CellWidth - 20,
+                MaxWidth = CellWidth - 16,
+                MaxHeight = 34, // 两行 13 DIU 的正文
+                LineHeight = 17,
+                LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
             };
             TextOptions.SetTextFormattingMode(_label, TextFormattingMode.Display);
 
@@ -720,12 +760,36 @@ internal sealed class LaunchpadWindow : Window
 /// </summary>
 internal sealed class LaunchpadGlass : AcrylicWindow
 {
-    readonly Border _tint = new();
+    readonly Border _tint;
+    readonly Image _surface;
+    readonly Grid _layers;
 
     public LaunchpadGlass() : base(rounded: false)
     {
         Title = "MacDock Launchpad Glass";
-        Content = _tint;
+        _layers = WallpaperFrost.Build(out _surface, out _tint, 26);
+        Content = _layers;
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        // Same wallpaper frost as the menu bar: the OS blur on this build is nearly opaque, and a
+        // launchpad that hides the desktop entirely is exactly what macOS does not do.
+        UseAccentBlur();
+        RefreshSurface(GlassBounds);
+    }
+
+    protected override void OnBoundsChanged(RECT bounds) => RefreshSurface(bounds);
+
+    void RefreshSurface(RECT bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+        var display = Displays.FromPoint(new POINT { X = bounds.Left + bounds.Width / 2, Y = bounds.Top + bounds.Height / 2 });
+        var brush = WallpaperFrost.BrushFor(bounds, display, out _);
+        _surface.Source = brush?.ImageSource;
+        _surface.Visibility = brush is null ? Visibility.Collapsed : Visibility.Visible;
+        _tint.Background = new SolidColorBrush(Tint(1));
     }
 
     public override void ApplyTheme()
@@ -738,20 +802,20 @@ internal sealed class LaunchpadGlass : AcrylicWindow
 
     public void FadeIn(int ms) => Fade(0, 1, ms);
 
+    /// <summary>Fades the whole glass, wallpaper layer included: cross-fading only the tint would flash.</summary>
     public void Fade(double from, double to, int ms)
     {
-        var brush = new SolidColorBrush(Tint(from));
-        _tint.Background = brush;
-        brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(Tint(to), TimeSpan.FromMilliseconds(ms))
+        _layers.BeginAnimation(OpacityProperty, new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(ms))
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
         });
     }
 
-    /// <summary>遮罩色：深色主题是 78% 的近黑，浅色主题是 70% 的白（跟着主题走，文字色才不会被吃掉）。</summary>
+    /// <summary>How dark the veil is: macOS keeps the desktop readable through Launchpad, so this is a
+    /// thin tint over the blur rather than the near-black sheet it used to be.</summary>
     static Color Tint(double alpha) => Theme.IsDark
-        ? Color.FromArgb((byte)Math.Round(alpha * 0xC8), 0x0A, 0x0A, 0x0E)
-        : Color.FromArgb((byte)Math.Round(alpha * 0xB4), 0xF4, 0xF4, 0xF6);
+        ? Color.FromArgb((byte)Math.Round(alpha * 0x59), 0x0A, 0x0A, 0x0E)   // 35%
+        : Color.FromArgb((byte)Math.Round(alpha * 0x40), 0xF4, 0xF4, 0xF6);  // 25%
 }
 
 /// <summary>

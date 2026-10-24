@@ -23,7 +23,8 @@ internal static class StartMenu
 
     public static DockItemConfig CreateConfig() => new() { Name = "Start", Target = Target };
 
-    public static BitmapSource Icon => _icon ??= CreateIcon();
+    /// <summary>Dock 里那个启动台的图标：左键开启动台，所以画成 macOS 的启动台样子，不是 Windows 徽标。</summary>
+    public static BitmapSource Icon => _icon ??= IconArt.Launchpad;
 
     /// <summary>Opens Start, or closes it when open, exactly like the Windows key.</summary>
     public static void Toggle() => PressKeys(VK_LWIN);

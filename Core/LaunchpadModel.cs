@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows.Media;
 
 namespace MacDock.Core;
@@ -71,8 +72,12 @@ internal sealed class LaunchpadEntry
 }
 
 /// <summary>
-/// 启动台的内容：把用户和公共开始菜单里的 .lnk 收全、去重、按名称排序，然后在后台线程逐个解出图标。
-/// 扫描和取图标都可能碰到坏快捷方式，出错只记日志、跳过那一条，绝不让启动台打不开。
+/// 启动台的内容：把用户和公共开始菜单里的 .lnk 收全、去噪、去重、按名称排序，然后在后台线程逐个解出图标。
+///
+/// 只收"真的是个应用"的条目：开一条快捷方式要能解析出目标，目标得是 .exe、不能是文件夹、不能是
+/// 帮助/文档/安装包/许可证一类。这台机器的开始菜单有 168 条 .lnk，其中一大半是 WSL 发行版带的应用
+/// （"Xfce Terminal (Ubuntu-24.04)" 这种）、卸载器、MATLAB 的激活工具和文件夹快捷方式，
+/// 全塞进启动台就没法看了 —— 过滤后剩几十条真应用。
 /// </summary>
 internal static class LaunchpadModel
 {
@@ -80,12 +85,25 @@ internal static class LaunchpadModel
     public const int Rows = 4;
     public const int PageSize = Columns * Rows;
 
-    /// <summary>开始菜单里这些东西不是应用，摆进启动台只会碍眼（卸载程序、帮助、官网链接……）。</summary>
+    /// <summary>名字里带这些词的条目不是应用（卸载、帮助、官网、许可证、更新器……）。</summary>
     static readonly string[] NoiseWords =
     [
         "uninstall", "卸载", "readme", "read me", "help", "帮助", "website", "官方网站", "official site",
         "repair", "修复", "documentation", "changelog", "release notes", "许可协议", "license agreement",
+        "activate", "deactivate", "激活", "反激活", "updater", "更新程序",
     ];
+
+    /// <summary>目标文件是这些后缀时不是应用（帮助文档、网页、文档、安装包、系统管理单元）。</summary>
+    static readonly string[] NoiseExtensions =
+    [
+        ".chm", ".hlp", ".txt", ".rtf", ".html", ".htm", ".url", ".pdf", ".msc", ".cpl", ".ico", ".jpg", ".png",
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ];
+
+    /// <summary>WSL 发行版给开始菜单塞的应用（"Thunar (Ubuntu-24.04)"）：留着只会把启动台淹掉。</summary>
+    static readonly System.Text.RegularExpressions.Regex DistroSuffix = new(
+        @"\s*\((?:ubuntu|debian|kali|fedora|arch|manjaro|opensuse|alpine|almalinux|rocky)[^)]*\)\s*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>用户开始菜单在前、公共开始菜单在后：同名时用户自己那份说了算。</summary>
     static IEnumerable<string> Folders()
@@ -94,14 +112,11 @@ internal static class LaunchpadModel
         yield return Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
     }
 
-    /// <summary>
-    /// 收集开始菜单里的应用。只收 .lnk（.url 是网页收藏，不是应用），跳过"启动"文件夹和卸载一类噪音，
-    /// 按名称去重再按名称排序——排队顺序必须是确定的，分页才不会在两台机器上乱跳。
-    /// </summary>
     public static List<LaunchpadEntry> Scan()
     {
-        var seen = new HashSet<string>(StringComparer.CurrentCultureIgnoreCase);
-        var entries = new List<LaunchpadEntry>();
+        var byTarget = new Dictionary<string, LaunchpadEntry>(StringComparer.OrdinalIgnoreCase);
+        int considered = 0, skippedDistro = 0, skippedNoise = 0, skippedNotApp = 0, merged = 0;
+        using var targets = new ShortcutTargets();
 
         foreach (var root in Folders())
         {
@@ -109,17 +124,58 @@ internal static class LaunchpadModel
             foreach (var file in Shortcuts(root))
             {
                 if (IsInStartup(file, root)) continue;
-                var name = System.IO.Path.GetFileNameWithoutExtension(file);
-                if (name.Length == 0 || IsNoise(name)) continue;
-                if (!seen.Add(name)) continue;
-                entries.Add(new LaunchpadEntry(name, file));
+                var name = Clean(System.IO.Path.GetFileNameWithoutExtension(file));
+                if (name.Length == 0) continue;
+                considered++;
+
+                if (DistroSuffix.IsMatch(name)) { skippedDistro++; continue; }
+                if (IsNoise(name)) { skippedNoise++; continue; }
+
+                var target = targets.Target(file);
+                if (!IsApplication(target)) { skippedNotApp++; continue; }
+
+                // 同一个程序在开始菜单里常有好几条（微信两份、Gmail 走 chrome_proxy……）：按目标合并。
+                // 解析不出目标（UWP 的 shell: 条目）时用快捷方式路径当键，别把条目丢掉。
+                var key = string.IsNullOrWhiteSpace(target) ? "lnk:" + file : target;
+                if (byTarget.TryGetValue(key, out var existing))
+                {
+                    merged++;
+                    // 名字取更短的那条："微信" 胜过 "微信 (64-bit)"。
+                    if (name.Length < existing.Name.Length) byTarget[key] = new LaunchpadEntry(name, file);
+                    continue;
+                }
+                byTarget[key] = new LaunchpadEntry(name, file);
             }
         }
 
-
+        var entries = byTarget.Values.ToList();
         entries.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCultureIgnoreCase));
-        Log.Info($"Launchpad: {entries.Count} apps from the Start menu");
+        Log.Info($"Launchpad: {entries.Count} apps kept of {considered} shortcuts " +
+                 $"(distro {skippedDistro}, noise {skippedNoise}, not-an-app {skippedNotApp}, merged {merged})");
         return entries;
+    }
+
+    /// <summary>
+    /// 目标是否"是个应用"：必须解析得出来、是文件、不是文件夹、不是文档/安装包一类。
+    /// 解析不出来（坏快捷方式、UWP 的 shell: 目标）时按名字放行 —— 宁可多留一条也不要漏掉真应用。
+    /// </summary>
+    static bool IsApplication(string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return true;
+        try
+        {
+            if (Directory.Exists(target)) return false;
+            var extension = System.IO.Path.GetExtension(target);
+            if (extension.Length > 0 && NoiseExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) return false;
+            // 安装器的图标壳（Windows\Installer\{GUID}\foo.ico）不是应用
+            if (target.Contains(@"\Windows\Installer\", StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, $"Checking the shortcut target {target}");
+            return true;
+        }
     }
 
     /// <summary>
@@ -151,7 +207,7 @@ internal static class LaunchpadModel
     }
 
     /// <summary>
-    /// 逐个解图标（每条要过一遍 Shell 的 COM 调用，一百多条要一两秒，所以只能放后台线程）。
+    /// 逐个解图标（每条要过一遍 Shell 的 COM 调用，几十上百条要一两秒，所以只能放后台线程）。
     /// 每解出一个就回调一次，界面可以先把名字摆上去、图标慢慢填，不用等全部完事。
     /// </summary>
     public static void LoadIcons(IReadOnlyList<LaunchpadEntry> entries, Action<LaunchpadEntry> loaded, CancellationToken token)
@@ -161,7 +217,7 @@ internal static class LaunchpadModel
             if (token.IsCancellationRequested) return;
             try
             {
-                entry.Icon = ShellItems.Icon(entry.Shortcut);
+                entry.Icon = IconArt.Squircle(ShellItems.Icon(entry.Shortcut), 128);
             }
             catch (Exception ex)
             {
@@ -210,6 +266,17 @@ internal static class LaunchpadModel
         return folder.Contains("Startup", StringComparison.OrdinalIgnoreCase) || folder.Contains("启动", StringComparison.Ordinal);
     }
 
+    /// <summary>去掉开始菜单里那些"给人看但占地方"的尾巴：位数、" - 快捷方式"、安装包后缀。</summary>
+    static string Clean(string name)
+    {
+        var text = name.Trim();
+        foreach (var suffix in new[] { " (64-bit)", " (32-bit)", " - Shortcut", " - 快捷方式", " (快捷方式)" })
+        {
+            if (text.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) text = text[..^suffix.Length].Trim();
+        }
+        return text;
+    }
+
     /// <summary>拉丁词按整词比（"helper" 不该被 "help" 误杀），中文词直接包含比。</summary>
     static bool IsNoise(string name)
     {
@@ -220,7 +287,6 @@ internal static class LaunchpadModel
             if (word[0] < 0x80)
             {
                 if (lower == word) return true;
-                // "ChangeLogRus" / "Readme(中文)" 这类也一并挡掉，同理不能误杀 Helper 之类
                 if (lower.StartsWith(word, StringComparison.Ordinal) && !char.IsLetter(lower[word.Length])) return true;
                 if (lower.StartsWith(word + " ", StringComparison.Ordinal) || lower.Contains(" " + word, StringComparison.Ordinal)) return true;
             }
@@ -230,5 +296,51 @@ internal static class LaunchpadModel
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// 解快捷方式的目标路径。用一次 WScript.Shell 的后期绑定调用，比每条都起一个 COM 对象快得多；
+    /// 失败就返回 null（调用方按"未知目标"处理，不会因为一条坏链接丢掉整份清单）。
+    /// </summary>
+    sealed class ShortcutTargets : IDisposable
+    {
+        readonly object? _shell;
+
+        public ShortcutTargets()
+        {
+            try
+            {
+                var type = Type.GetTypeFromProgID("WScript.Shell");
+                if (type is not null) _shell = Activator.CreateInstance(type);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Creating the shortcut reader");
+            }
+        }
+
+        public string? Target(string shortcut)
+        {
+            if (_shell is null) return null;
+            try
+            {
+                var link = _shell.GetType().InvokeMember("CreateShortcut",
+                    System.Reflection.BindingFlags.InvokeMethod, null, _shell, [shortcut]);
+                if (link is null) return null;
+                var target = link.GetType().InvokeMember("TargetPath",
+                    System.Reflection.BindingFlags.GetProperty, null, link, null) as string;
+                return string.IsNullOrWhiteSpace(target) ? null : Environment.ExpandEnvironmentVariables(target);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, $"Reading the shortcut {shortcut}");
+                return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_shell is not null && Marshal.IsComObject(_shell)) Marshal.FinalReleaseComObject(_shell);
+        }
     }
 }

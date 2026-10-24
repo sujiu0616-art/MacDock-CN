@@ -30,7 +30,7 @@ internal sealed class DockItem
         }
         var expanded = Environment.ExpandEnvironmentVariables(config.Target);
         IsFolder = Directory.Exists(expanded);
-        Icon = ShellItems.Icon(config.Target);
+        Icon = IconArt.Squircle(ShellItems.Icon(config.Target));
         Identity = IsFolder ? AppIdentity.None : AppIdentity.FromTarget(config.Target); // a folder owns no windows
         if (IsFolder && string.IsNullOrWhiteSpace(config.Name))
         {
@@ -55,7 +55,7 @@ internal sealed class DockItem
         var target = registered ? appsFolderTarget! : window.Identity.ExePath ?? "";
 
         Config = new DockItemConfig { Target = target, Name = ResolveName(window.Identity, window.Title) };
-        Icon = target.Length > 0 ? ShellItems.Icon(target) : null;
+        Icon = IconArt.Squircle(target.Length > 0 ? ShellItems.Icon(target) : null);
         Presence = 0; // grows in
     }
 
