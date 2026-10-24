@@ -89,6 +89,10 @@ internal static class Launcher
         try
         {
             var target = Environment.ExpandEnvironmentVariables(item.Target);
+            // 已经是"进程在、窗口藏着"的状态（缩到托盘的客户端、Task Manager 的「最小化时隐藏」）：
+            // 先把隐藏窗口叫回来，别去起第二个实例（单实例程序会立刻自己退出，看着像点了没反应）。
+            if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && WindowActions.SurfaceHiddenWindows(target))
+                return;
             // 让新进程有权把自己切到前台：否则它常被前台锁挡在别的窗口后面，看上去像"点了没反应"。
             try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { /* 非关键路径 */ }
 
