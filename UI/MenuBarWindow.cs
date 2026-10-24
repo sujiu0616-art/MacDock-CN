@@ -129,6 +129,12 @@ internal sealed class MenuBarWindow : Window
         base.OnSourceInitialized(e);
         _hwnd = new WindowInteropHelper(this).Handle;
         MakeToolWindow(_hwnd);
+        // 分层窗口 + DWM 默认圆角 = 左上角被削出的黑缺角：显式关掉圆角偏好。
+        int square = DWMWCP_DONOTROUND;
+        DwmSetWindowAttribute(_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref square, sizeof(int));
+        // 去掉标题栏系统菜单位：否则无边框窗口的左上角会被画成一块 21×21 的黑方块。
+        long style = (long)GetWindowLongPtr(_hwnd, GWL_STYLE);
+        SetWindowLongPtr(_hwnd, GWL_STYLE, (IntPtr)(style & ~(WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)));
         HwndSource.FromHwnd(_hwnd)!.AddHook(WndProc);
         _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
         _explorerPid = TaskbarState.ExplorerProcessId();
@@ -401,44 +407,3 @@ internal sealed class MenuBarWindow : Window
     }
 }
 
-/// <summary>The acrylic strip under the menu bar's content.</summary>
-internal sealed class MenuBarGlass : AcrylicWindow
-{
-    readonly Border _tint;
-    bool _visible = true;
-
-    public MenuBarGlass() : base(rounded: false)
-    {
-        Title = "MacDock Menu Bar Glass";
-        _tint = new Border();
-        Content = _tint;   // 只有一层 tint：真实模糊来自窗口的 accent 策略，不画壁纸
-    }
-
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        // The bar sits over the wallpaper (the reserved strip keeps maximised windows below it), so it
-        // paints a blurred crop of it rather than the OS backdrop, which reads as an opaque dark band
-        // on this build. The accent blur stays as the fallback for a wallpaper-less theme.
-        UseAccentBlur();
-    }
-
-    /// <summary>真实模糊由窗口的 accent 策略提供，这里只决定"多暗"。</summary>
-    public bool Bright => !Theme.IsDark;
-
-    public override void ApplyTheme()
-    {
-        ApplyGlassTheme(DWMWA_COLOR_NONE);
-        // 很淡的一层：模糊本身来自 accent 策略，tint 只负责把亮度压到 mac 那个程度。
-        _tint.Background = new SolidColorBrush(Theme.IsDark
-            ? Color.FromArgb(0x4D, 0x0A, 0x0A, 0x0C)   // 30%
-            : Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF)); // 35%
-    }
-
-    public void SetVisible(bool visible)
-    {
-        if (Handle == IntPtr.Zero || visible == _visible) return;
-        _visible = visible;
-        ShowWindow(Handle, visible ? SW_SHOWNOACTIVATE : SW_HIDE);
-    }
-}
