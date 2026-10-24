@@ -43,21 +43,21 @@ internal sealed class LaunchpadWindow : Window
     static readonly Brush DarkSubtle = Frozen(0xAD, 0xAD, 0xB4);
     static readonly Brush LightSubtle = Frozen(0x5C, 0x5C, 0x60);
     static readonly Brush DarkHover = Frozen(0xFF, 0xFF, 0xFF, 0x0F);
-    static readonly Brush LightHover = Frozen(0x00, 0x00, 0x00, 0x0A);
+    static readonly Brush LightHover = Frozen(0x00, 0x00, 0x00, 0x16);
     static readonly Brush DarkSelected = Frozen(0xFF, 0xFF, 0xFF, 0x1C);
-    static readonly Brush LightSelected = Frozen(0x00, 0x00, 0x00, 0x12);
+    static readonly Brush LightSelected = Frozen(0x00, 0x00, 0x00, 0x24);
     static readonly Brush DarkOutline = Frozen(0xFF, 0xFF, 0xFF, 0x24);
     static readonly Brush LightOutline = Frozen(0x00, 0x00, 0x00, 0x1F);
     static readonly Brush DarkBubble = Frozen(0x0A, 0x0A, 0x0E, 0xCC);
     static readonly Brush LightBubble = Frozen(0xFF, 0xFF, 0xFF, 0xE6);
     static readonly Brush DarkDotOn = Frozen(0xFF, 0xFF, 0xFF, 0xE6);
     static readonly Brush DarkDotOff = Frozen(0xFF, 0xFF, 0xFF, 0x4D);
-    static readonly Brush LightDotOn = Frozen(0x00, 0x00, 0x00, 0xB3);
-    static readonly Brush LightDotOff = Frozen(0x00, 0x00, 0x00, 0x4D);
+    static readonly Brush LightDotOn = Frozen(0x00, 0x00, 0x00, 0xC8);
+    static readonly Brush LightDotOff = Frozen(0x00, 0x00, 0x00, 0x61);
     static readonly Brush DarkField = Frozen(0xFF, 0xFF, 0xFF, 0x1F);
     static readonly Brush DarkFieldBorder = Frozen(0xFF, 0xFF, 0xFF, 0x38);
-    static readonly Brush LightField = Frozen(0xFF, 0xFF, 0xFF, 0x66);
-    static readonly Brush LightFieldBorder = Frozen(0x00, 0x00, 0x00, 0x33);
+    static readonly Brush LightField = Frozen(0xFF, 0xFF, 0xFF, 0xB8);   // 浅色下：白 72%，压在亮底上也能看清
+    static readonly Brush LightFieldBorder = Frozen(0x00, 0x00, 0x00, 0x1F);
 
     static LaunchpadWindow? _open;
 
@@ -96,7 +96,7 @@ internal sealed class LaunchpadWindow : Window
     {
         // 配色跟系统主题走（macOS 的启动台也是）：深色=暗玻璃+白字，浅色=白玻璃+深字。
         // 之前按壁纸亮度翻配色，但玻璃遮罩仍按主题算，结果深色下出现"深字压深底"。
-        bool dark = Theme.IsDark;
+        bool dark = Theme.IsDark && !Environment.GetCommandLineArgs().Contains("--light");
         _text = dark ? DarkText : LightText;
         _subtle = dark ? DarkSubtle : LightSubtle;
         _tileHover = dark ? DarkHover : LightHover;
@@ -596,18 +596,16 @@ internal sealed class LaunchpadWindow : Window
 
     void ShowMenu(LaunchpadEntry entry)
     {
-        var menu = new ContextMenu { Placement = PlacementMode.MousePoint, PlacementTarget = _root };
-        MenuTheme.Apply(menu);
-        MenuTheme.FadeIn(menu);
-        var open = new MenuItem { Header = Loc.T("Open").Replace("_", "__") };
-        open.Click += (_, _) => Launch(entry);
-        var reveal = new MenuItem { Header = Loc.T("Show in File Explorer").Replace("_", "__") };
-        reveal.Click += (_, _) => LaunchpadModel.Reveal(entry);
-        menu.Items.Add(open);
-        menu.Items.Add(reveal);
-        menu.Closed += (_, _) => FocusSearch(); // 菜单关掉后键盘要回到搜索框
-        menu.IsOpen = true;
+        // 统一的 macOS 风格弹窗（原来是 WPF ContextMenu，白底直角，和启动台完全不搭）
+        var menu = new PopMenu();
+        menu.Add(Loc.T("Open"), () => Launch(entry));
+        menu.Add(Loc.T("Show in File Explorer"), () => LaunchpadModel.Reveal(entry));
+        _menu = menu;
+        menu.Closed += () => { _menu = null; FocusSearch(); };   // 菜单关掉后键盘回到搜索框
+        if (GetCursorPos(out var p)) menu.Show(p.X, p.Y);
     }
+
+    PopMenu? _menu;
 
     // ───────────────────────── 输入 ─────────────────────────
 
@@ -777,8 +775,11 @@ internal sealed class LaunchpadWindow : Window
 /// 上面盖一层半透明深色，白字才读得清。淡入淡出靠动画这层颜色的透明度——分层窗口才能改整体不透明度，
 /// 这块是非分层窗口（为了系统亚克力），只能这么淡。
 /// </summary>
-internal sealed class LaunchpadGlass : AcrylicWindow
+internal sealed class LaunchpadGlass : AcrylicWindow   // 只用它的分层窗口骨架，不用 DWM 模糊
 {
+    /// <summary>真透明：不要 DWM 的 mica/acrylic 材料（在这台机器上它是一块不透明灰板）。</summary>
+    protected override bool UseSystemBackdrop => false;
+
     readonly Border _tint;
     readonly Image _veil = new() { Stretch = Stretch.Fill };
     readonly Grid _layers = new() { ClipToBounds = true };
@@ -805,7 +806,8 @@ internal sealed class LaunchpadGlass : AcrylicWindow
         base.OnSourceInitialized(e);
         // Same wallpaper frost as the menu bar: the OS blur on this build is nearly opaque, and a
         // launchpad that hides the desktop entirely is exactly what macOS does not do.
-        UseAccentBlur();
+        // 不用系统的 accent 模糊：这台 Win11 上它渲染成一块不透明的灰板（就是"浅色启动台很丑"的根因）。
+        // 启动台本身就是分层窗口，靠 tint 的真透明即可。
     }
 
     public override void ApplyTheme()
@@ -830,8 +832,8 @@ internal sealed class LaunchpadGlass : AcrylicWindow
     /// <summary>How dark the veil is: macOS keeps the desktop readable through Launchpad, so this is a
     /// thin tint over the blur rather than the near-black sheet it used to be.</summary>
     static Color Tint(double alpha) => Theme.IsDark
-        ? Color.FromArgb((byte)Math.Round(alpha * 0x73), 0x0A, 0x0A, 0x0E)   // 45%：白字要底，同时还能看见桌面
-        : Color.FromArgb((byte)Math.Round(alpha * 0x40), 0xF4, 0xF4, 0xF6);  // 25%
+        ? Color.FromArgb((byte)Math.Round(alpha * 0xF0), 0x14, 0x14, 0x18)   // 94%：实底，白字清晰
+        : Color.FromArgb((byte)Math.Round(alpha * 0xF0), 0xF4, 0xF6, 0xFA);   // 94%：实底（真透明在全屏窗口上这台机器给不了，见笔记）
 }
 
 /// <summary>

@@ -1,129 +1,58 @@
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Threading;
 using MacDock.Interop;
 using static MacDock.Interop.NativeMethods;
 
 namespace MacDock.UI;
 
 /// <summary>
-/// Context menu for a window that never activates. Such a menu gets no focus and WPF does not
-/// dismiss it on outside clicks, so it is given the foreground while open (like a tray menu),
-/// watched for clicks elsewhere, and the previous foreground window gets its focus back.
+/// Dock 与启动台的右键菜单：<see cref="PopMenu"/> 的薄封装。
+///
+/// 从 WPF 的 ContextMenu 换过来的原因：它的默认外观是 Windows 那套白底直角菜单，
+/// 而自定义模板在这套"分层 + 不激活"的窗口上根本不绘制。现在外观与交互都在 <see cref="PopMenu"/> 里，
+/// 这里只保留两件它管不了的事：弹出前把前台交给 Dock（否则菜单收不到鼠标），关掉后把前台还回去。
 /// </summary>
 internal sealed class DockMenu
 {
-    readonly ContextMenu _menu = new() { Placement = PlacementMode.MousePoint };
-    readonly DispatcherTimer _outsideClickWatch = new() { Interval = TimeSpan.FromMilliseconds(40) };
+    readonly PopMenu _menu = new();
     IntPtr _ownerHwnd, _previousForeground;
     bool _actionTaken;
 
-    public DockMenu()
+    public DockMenu() => _menu.Closed += () =>
     {
-        MenuTheme.Apply(_menu);
-        _outsideClickWatch.Tick += (_, _) => CloseOnOutsideClick();
-        _menu.Closed += (_, _) =>
-        {
-            _outsideClickWatch.Stop();
-            // Hand the focus back unless a command moved it somewhere on purpose.
-            if (!_actionTaken && GetForegroundWindow() == _ownerHwnd && _previousForeground != IntPtr.Zero)
-                SetForegroundWindow(_previousForeground);
-            Closed?.Invoke();
-        };
-    }
+        // Hand the focus back unless a command moved it somewhere on purpose.
+        if (!_actionTaken && _previousForeground != IntPtr.Zero && GetForegroundWindow() == _ownerHwnd)
+            SetForegroundWindow(_previousForeground);
+        Closed?.Invoke();
+    };
 
     public event Action? Closed;
 
     public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null) =>
-        Root.Add(header, action, isChecked, enabled, gesture);
+        _menu.Add(header, () => { _actionTaken = true; action(); }, isChecked, enabled, gesture);
 
-    public void AddSeparator() => Root.AddSeparator();
+    public void AddSeparator() => _menu.AddSeparator();
 
     /// <summary>A greyed-out caption above a group of items.</summary>
-    public void AddHeader(string text) => Root.AddHeader(text);
+    public void AddHeader(string text) => _menu.AddHeader(text);
 
     /// <summary>An item that opens a submenu; fill the returned section.</summary>
-    public Section AddSubmenu(string header) => Root.AddSubmenu(header);
-
-    Section Root => _root ??= new Section(this, _menu.Items);
-    Section? _root;
-
-    /// <summary>Items of the menu or of one of its submenus.</summary>
-    public sealed class Section(DockMenu owner, ItemCollection items)
-    {
-        public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null)
-        {
-            // "_" marks an access key in WPF menus; window titles must show it literally.
-            var item = new MenuItem
-            {
-                Header = header.Replace("_", "__"),
-                IsChecked = isChecked,
-                IsEnabled = enabled,
-                InputGestureText = gesture ?? "",
-            };
-            item.Click += (_, _) =>
-            {
-                owner._actionTaken = true;
-                action();
-            };
-            items.Add(item);
-        }
-
-        public void AddSeparator()
-        {
-            if (items.Count > 0 && items[^1] is not Separator) items.Add(new Separator());
-        }
-
-        public void AddHeader(string text) =>
-            items.Add(new MenuItem { Header = text.Replace("_", "__"), IsEnabled = false, FontSize = 11 });
-
-        public Section AddSubmenu(string header)
-        {
-            var item = new MenuItem { Header = header.Replace("_", "__") };
-            items.Add(item);
-            return new Section(owner, item.Items);
-        }
-    }
+    public PopMenu AddSubmenu(string header) => _menu.AddSubmenu(header);
 
     public void Show(Window owner, IntPtr ownerHwnd, IntPtr previousForeground)
     {
-        if (_menu.Items.Count > 0 && _menu.Items[^1] is Separator) _menu.Items.RemoveAt(_menu.Items.Count - 1);
         _ownerHwnd = ownerHwnd;
         _previousForeground = previousForeground;
         SetForegroundWindow(ownerHwnd); // allowed: the right click was the last input
-        _menu.PlacementTarget = owner;
-        _menu.IsOpen = true;
-        _outsideClickWatch.Start();
+
+        if (!GetCursorPos(out var p)) return;
+        _menu.Show(p.X, p.Y);
     }
 
-    void CloseOnOutsideClick()
+    /// <summary>在指定屏幕坐标弹出（--menu 预览用）。</summary>
+    public void ShowAt(IntPtr ownerHwnd, int x, int y)
     {
-        if (!_menu.IsOpen) return;
-        bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
-                    || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0
-                    || (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
-        if (!down || !GetCursorPos(out var p) || IsOverMenu(p)) return;
-        _menu.IsOpen = false;
-    }
-
-    bool IsOverMenu(POINT p) => IsOver(_menu, _menu.Items, p);
-
-    /// <summary>The menu's own rectangle or that of an open submenu (a separate popup window).</summary>
-    static bool IsOver(FrameworkElement popupContent, ItemCollection items, POINT p)
-    {
-        if (popupContent.IsLoaded && PresentationSource.FromVisual(popupContent) is not null)
-        {
-            var topLeft = popupContent.PointToScreen(new Point(0, 0));
-            var bottomRight = popupContent.PointToScreen(new Point(popupContent.ActualWidth, popupContent.ActualHeight));
-            if (p.X >= topLeft.X && p.X <= bottomRight.X && p.Y >= topLeft.Y && p.Y <= bottomRight.Y) return true;
-        }
-        foreach (var entry in items)
-        {
-            if (entry is not MenuItem { HasItems: true, IsSubmenuOpen: true } item) continue;
-            var popup = item.Template?.FindName("PART_Popup", item) as Popup;
-            if (popup?.Child is FrameworkElement child && IsOver(child, item.Items, p)) return true;
-        }
-        return false;
+        _ownerHwnd = ownerHwnd;
+        _previousForeground = GetForegroundWindow();
+        _menu.Show(x, y);
     }
 }

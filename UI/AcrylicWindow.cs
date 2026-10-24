@@ -40,6 +40,12 @@ internal abstract class AcrylicWindow : Window
         });
     }
 
+    /// <summary>
+    /// 是否让 DWM 给整扇窗加"系统背景材料"（mica/acrylic）。这台 Win11 上它会渲染成一块不透明的灰板，
+    /// 需要真透明的窗口（启动台）把它关掉，只保留逐像素 alpha。
+    /// </summary>
+    protected virtual bool UseSystemBackdrop => true;
+
     public IntPtr Handle { get; private set; }
 
     RECT _bounds;
@@ -197,12 +203,15 @@ internal abstract class AcrylicWindow : Window
         source.CompositionTarget.BackgroundColor = Colors.Transparent;
         source.AddHook(AcrylicWndProc);
 
-        var margins = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
-        DwmExtendFrameIntoClientArea(Handle, ref margins);
+        if (UseSystemBackdrop)
+        {
+            var margins = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+            DwmExtendFrameIntoClientArea(Handle, ref margins);
         int corner = _rounded ? DWMWCP_ROUND : DWMWCP_DONOTROUND;
         DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
-        int backdrop = DWMSBT_TRANSIENTWINDOW;
-        DwmSetWindowAttribute(Handle, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            int backdrop = DWMSBT_TRANSIENTWINDOW;
+            DwmSetWindowAttribute(Handle, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+        }
         ApplyTheme();
     }
 

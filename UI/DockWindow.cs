@@ -230,6 +230,8 @@ internal sealed class DockWindow : Window
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
+        if (Environment.GetCommandLineArgs().Contains("--menu"))
+            Dispatcher.BeginInvoke(new Action(PreviewMenuForDiagnostics), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
 
         _followTimer.Tick += (_, _) => FollowPointer();
         _shellGuard.Interval = TimeSpan.FromSeconds(5);
@@ -2033,6 +2035,22 @@ internal sealed class DockWindow : Window
         var work = display.Work;
         return rect.Left <= work.Left + tolerance && rect.Top <= work.Top + tolerance
                && rect.Right >= work.Right - tolerance && rect.Bottom >= work.Bottom - tolerance;
+    }
+
+    /// <summary>--menu：在固定位置弹一个样例菜单（只用于截图验收外观）。</summary>
+    void PreviewMenuForDiagnostics()
+    {
+        var menu = new DockMenu();
+        menu.Add(Loc.T("Open"), () => { });
+        menu.Add(Loc.T("Show in File Explorer"), () => { }, enabled: false);
+        menu.AddSeparator();
+        menu.Add("Pin to Dock", () => { }, isChecked: true);
+        menu.Add("Options", () => { });
+        menu.AddSeparator();
+        menu.AddHeader("RECENT");
+        menu.Add("report-final.pdf", () => { });
+        menu.Add("a-very-long-document-name-that-should-ellipsize.pdf", () => { });
+        menu.ShowAt(_hwnd, 900, 700);
     }
 
     void ApplyTheme()
