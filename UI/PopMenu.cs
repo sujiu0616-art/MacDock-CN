@@ -55,6 +55,7 @@ internal sealed class PopMenu : IDisposable
     internal static void CloseAllOpen()
     {
         foreach (var menu in Open.ToList()) menu.CloseAll();
+        if (Open.Count == 0) MouseHook.Drop();
     }
     bool _leavingToChild;
 
@@ -288,13 +289,16 @@ internal sealed class PopMenu : IDisposable
 
     public void Close()
     {
-        Log.Info($"PopMenu: closed ({_window.ActualWidth:0}x{_window.ActualHeight:0})");
+        if (_window.IsVisible) Log.Info($"PopMenu: closed ({_window.ActualWidth:0}x{_window.ActualHeight:0})");
+        // 先记账再判断可见性：窗口已经不可见时也要把菜单从 Open 里摘掉，
+        // 否则低级鼠标钩子会一直挂着（全系统鼠标输入都要等我们的 UI 线程 → 别的软件像卡死）。
+        bool wasOpen = Open.Remove(this);
+        if (Open.Count == 0) MouseHook.Drop();
         if (!_window.IsVisible) return;
         _watch.Stop();
         _window.Hide();
-        Open.Remove(this);
-        if (Open.Count == 0) MouseHook.Drop();
         Closed?.Invoke();
+        _ = wasOpen;
     }
 
     void CloseAll()
@@ -401,6 +405,17 @@ internal static class MouseHook
         _proc ??= Callback;
         _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
         if (_hook == IntPtr.Zero) Log.Info("PopMenu: the mouse hook was refused; Esc still closes the menu");
+    }
+
+    /// <summary>没有任何菜单开着却还挂着钩子时，强制卸掉（定时器每秒调一次，开销可忽略）。</summary>
+    public static void DropIfIdle()
+    {
+        if (_hook != IntPtr.Zero && PopMenu.OpenMenus.Count == 0)
+        {
+            UnhookWindowsHookEx(_hook);
+            _hook = IntPtr.Zero;
+            Log.Info("PopMenu: dropped a stale mouse hook");
+        }
     }
 
     public static void Drop()
