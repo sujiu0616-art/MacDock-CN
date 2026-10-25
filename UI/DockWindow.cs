@@ -1418,6 +1418,8 @@ internal sealed class DockWindow : Window
     void Launch(DockItem item)
     {
         // "默认以管理员启动"：开了就一律走提权路径（UAC 确认框由系统弹）
+        // 点开时就跳一下（macOS 的启动弹跳）。genie 动画删掉之后，这里是唯一的"点开反馈"。
+        if (!item.IsStart && !item.IsTrash && !item.IsFolder) item.Bounce.Start(BounceKind.Launch, Now);
         if (item.Config.RunAsAdmin && Launcher.CanRunAsAdmin(item))
         {
             SetForegroundWindow(_hwnd);
