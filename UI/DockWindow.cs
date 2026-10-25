@@ -242,7 +242,7 @@ internal sealed class DockWindow : Window
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
             // 心跳现在是 120ms，全盘扫描仍保持 ~2 秒一次（按时间判断，不按 tick 计数）
-            if ((DateTime.UtcNow - _lastStripSweep).TotalSeconds >= 2)
+            if (!_config.Settings.SafeMode && (DateTime.UtcNow - _lastStripSweep).TotalSeconds >= 2)
             {
                 _lastStripSweep = DateTime.UtcNow;
                 if (!_stripSweeping)
@@ -267,7 +267,7 @@ internal sealed class DockWindow : Window
                 if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
             }), System.Windows.Threading.DispatcherPriority.Input));
         _foregroundWatcher.Start();
-        UpdateStripGuard();
+        if (!_config.Settings.SafeMode) UpdateStripGuard();
         StripGuard.RepairWronglyHidden();
         Dispatcher.BeginInvoke(new Action(StripGuard.Sweep), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         // 启动把图标都解完之后做一次紧凑 GC + trim
@@ -352,7 +352,8 @@ internal sealed class DockWindow : Window
         if (_config.Settings.NumberShortcuts) _numberShortcuts = new NumberShortcuts(OnNumberShortcut);
         StartTrashWatch();
 
-        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        DockConfig.SafeMode = _config.Settings.SafeMode;
+        if (!_config.Settings.SafeMode) KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _tracker = new WindowTracker(_hwnd);
         _tracker.MinimizeTarget = MinimizeTargetFor;
         _tracker.Changed += SyncWindows;
@@ -1924,7 +1925,8 @@ internal sealed class DockWindow : Window
         if (!_pauseReasons.Remove(reason) || _pauseReasons.Count > 0) return;
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
-        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        DockConfig.SafeMode = _config.Settings.SafeMode;
+        if (!_config.Settings.SafeMode) KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _menuBars?.SetPaused(false);
         _trashTimer?.Start();
         Revalidate();

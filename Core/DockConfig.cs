@@ -17,6 +17,14 @@ internal sealed class DockSettings
     /// <summary>Hide the Windows taskbar while the dock runs (it always comes back when the dock ends).</summary>
     public bool ReplaceTaskbar { get; set; } = true;
 
+    /// <summary>
+    /// 安全模式：外壳只做"显示 Dock/菜单栏 + 启动应用"，不再介入全局输入、
+
+    /// 不再抢占前台、不再动别的程序的窗口（键盘钩子/StripGuard/前台 hack 全部关闭）。
+    /// 代价：F4 打开启动台失效、火狐那个 Battery Watcher 小窗会重新透出来。
+    /// </summary>
+    public bool SafeMode { get; set; }
+
     /// <summary>Shows / hides the Windows taskbar again while the dock replaces it.</summary>
     public string TaskbarHotkey { get; set; } = "Ctrl+Alt+Shift+B";
 
@@ -82,6 +90,9 @@ internal sealed class DockConfig
 
     /// <summary>Folders shown as stacks, between the running apps and the Recycle Bin.</summary>
     public List<DockItemConfig> Folders { get; set; } = [new DockItemConfig { Target = KnownFolders.Downloads }];
+
+    /// <summary>当前生效的安全模式（由 Dock 启动时写入，WindowActions 等无实例的地方读它）。</summary>
+    public static bool SafeMode { get; set; }
 
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MacDock");
