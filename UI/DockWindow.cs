@@ -298,15 +298,15 @@ internal sealed class DockWindow : Window
         _displayLayout = Displays.Layout();
         Place();
 
-        // 1) 先把 Windows 任务栏收掉：这一步只要几毫秒，而且用户最不想看到的就是"两个任务栏叠着"。
-        _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
-        _replacer.Start();
-        long afterTaskbar = StartupTiming.ElapsedMilliseconds;
 
-        // 2) 托盘挂钩是最慢的一环（冷启动实测 8.7s），放到首帧之后再跑：
-        //    期间 Dock 已经顶上去了，托盘图标晚几秒出现远比"双任务栏"好。
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            // 先收掉 Windows 任务栏（几毫秒），再做慢的托盘挂钩：Dock 已经画出来了，
+            // 所以不会有"任务栏没了但 Dock 还没出现"的空窗，双任务栏也只存在这几毫秒。
+            _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
+            _replacer.Start();
+            long afterTaskbar = StartupTiming.ElapsedMilliseconds;
+
             if (_config.Settings.MenuBar) ShowMenuBar();
             long afterMenuBar = StartupTiming.ElapsedMilliseconds;
             Log.Info($"StartupTiming: menuBar={afterMenuBar}ms taskbarHiddenAt={afterTaskbar}ms at={DateTime.Now:HH:mm:ss.fff} deferred=yes");
