@@ -506,7 +506,10 @@ internal sealed class DockWindow : Window
     /// </summary>
     void EnsureShellVisible()
     {
-        if (_hwnd == IntPtr.Zero || _launchpadOpen || _suppressedByNativeTaskbar) return;
+        // _fullscreen 时也要跳过：全屏应用在前面时是我们主动收起的，
+        // 这里每 5 秒一次"看不见就显示回来"会把 Dock 又拉出来（菜单栏却还藏着）
+        // → 用户看到的就是"全屏后任务栏还在、菜单不在"。
+        if (_hwnd == IntPtr.Zero || _launchpadOpen || _suppressedByNativeTaskbar || _fullscreen) return;
         try
         {
             bool hidden = !IsWindowVisible(_hwnd);
