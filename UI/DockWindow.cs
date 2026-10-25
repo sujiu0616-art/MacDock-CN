@@ -255,6 +255,7 @@ internal sealed class DockWindow : Window
                 }
             }
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
+            CheckStuckTaskSwitcher();
         };
         UiWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
@@ -1426,6 +1427,7 @@ internal sealed class DockWindow : Window
             Launch(item);
             return;
         }
+        Log.Info($"Click: {item.Name} running={item.IsRunning} windows={windows.Count} inFront={windows.Any(w => w.Handle == _foregroundAtPress)}");
         bool inFront = windows.Any(w => w.Handle == _foregroundAtPress);
         if (!inFront) ActivateWindow(windows[0].Handle);
         else if (windows.Count == 1) MinimizeWindow(windows[0].Handle);
@@ -2139,6 +2141,26 @@ internal sealed class DockWindow : Window
         }
 
         _menuBars?.SetFullscreen(hide);   // 幂等：菜单栏内部会自己判断是否已经一致
+    }
+
+    long _switchOverlaySeenAt;
+
+    /// <summary>explorer 的"任务切换"遮罩卡住时会吃掉所有应用的点击（见 WindowActions.RepairStuckTaskSwitcher）。</summary>
+    void CheckStuckTaskSwitcher()
+    {
+        IntPtr overlay = IntPtr.Zero;
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsWindowVisible(hwnd)) return true;
+            if (GetClassName(hwnd) is not "XamlExplorerHostIslandWindow") return true;
+            if (GetWindowTextLength(hwnd) == 0) return true;
+            overlay = hwnd;
+            return false;
+        }, IntPtr.Zero);
+
+        if (overlay == IntPtr.Zero) { _switchOverlaySeenAt = 0; return; }
+        if (_switchOverlaySeenAt == 0) { _switchOverlaySeenAt = Environment.TickCount64; return; }
+        WindowActions.RepairStuckTaskSwitcher(_switchOverlaySeenAt);
     }
 
     bool _suppressedByNativeTaskbar;

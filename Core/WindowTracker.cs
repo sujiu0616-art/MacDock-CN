@@ -23,6 +23,8 @@ internal sealed class WindowTracker : IDisposable
     static readonly HashSet<string> IgnoredClasses =
     [
         "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Windows.UI.Core.CoreWindow",
+        "OleDdeWndClass", "MSCTFIME UI", "IME", "CiceroUIWndFrame",
+        "OleDdeWndClass", "MSCTFIME UI", "IME", "CiceroUIWndFrame",
     ];
 
     readonly IntPtr _hwnd;
@@ -263,6 +265,11 @@ internal sealed class WindowTracker : IDisposable
             if (GetWindowTextLength(hwnd) == 0) return false;
         }
         if (IsCloaked(hwnd)) return false;
+
+        // 0×0 的窗口不是"真窗口"：Electron 的 OleDdeWndClass（DDE Server Window）、Qt 的 QWindowIcon
+        // 之类都会命中；点它们什么都不会发生（用户感知就是"点了没反应/无响应"）。
+        // 实测 ZCode 因此被记成"有 2 个窗口"，第二次点图标切到那个 0×0 窗口 → 毫无反应。
+        if (GetWindowRect(hwnd, out var windowRect) && (windowRect.Width <= 0 || windowRect.Height <= 0)) return false;
         return !IgnoredClasses.Contains(GetClassName(hwnd));
     }
 }

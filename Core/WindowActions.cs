@@ -52,7 +52,11 @@ internal static class WindowActions
 
             BringWindowToTop(hwnd);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            if (SetForegroundWindow(hwnd)) return true;
+            if (SetForegroundWindow(hwnd))
+            {
+                Log.Info($"Activate ok (attach) fg={GetForegroundWindow()}");
+                return true;
+            }
         }
         finally
         {
@@ -60,9 +64,10 @@ internal static class WindowActions
             if (attachedFg) AttachThreadInput(current, foregroundThread, false);
         }
 
-        // 最后一招：模拟一次 ALT 抬起，解除前台锁后再切
-        keybd_event(0x12 /* VK_MENU */, 0, 0, UIntPtr.Zero);
-        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        // 最后一招只用 SwitchToThisWindow。
+        // 注意：**不要再模拟 ALT 按下/抬起** —— 裸发 ALT 会把系统的"任务切换遮罩"
+        // （explorer / XamlExplorerHostIslandWindow，标题"任务切换"）唤起来并卡在最前面，
+        // 表现就是"窗口能拖、但内容区点击全都没反应"。已实测踩过这个坑。
         SwitchToThisWindow(hwnd, true);
         if (GetForegroundWindow() == hwnd) return true;
 
@@ -143,6 +148,26 @@ internal static class WindowActions
         return true;
     }
 
+
+    /// <summary>
+    /// 自愈：把卡住不走的"任务切换遮罩"收掉。
+    /// 该遮罩是 explorer 的 <c>XamlExplorerHostIslandWindow</c>（标题"任务切换"），
+    /// 它一旦卡在最前面，其它应用的**内容区**就收不到点击（窗口框架仍可拖动），
+    /// 用户感知就是"这个软件无响应"。用户自己按 Alt+Tab 时它本来就该在，所以只在
+    /// 没有按住 Alt、且它已经持续可见一段时间时才动手。
+    /// </summary>
+    public static void RepairStuckTaskSwitcher(long visibleSinceTicks)
+    {
+        if (visibleSinceTicks == 0) return;
+        if ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0) return;                 // 用户自己在切换
+        if (Environment.TickCount64 - visibleSinceTicks < 1500) return;        // 刚出现，可能是正常的
+        keybd_event(VK_ESCAPE, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_ESCAPE, 0, 2, UIntPtr.Zero);
+        Log.Info("Repaired a stuck task-switch overlay (content clicks were being swallowed)");
+    }
+
+    const byte VK_MENU = 0x12, VK_ESCAPE = 0x1B;
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
 
     /// <summary>Asks the window to close, exactly like its close button.</summary>
     public static void Close(IntPtr hwnd) => PostMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, IntPtr.Zero);
