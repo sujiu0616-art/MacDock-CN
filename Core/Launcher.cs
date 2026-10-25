@@ -143,7 +143,13 @@ internal static class Launcher
                 await Task.Delay(1500).ConfigureAwait(false);
                 bool died = false;
                 try { died = started.HasExited; } catch (Exception) { }
-                if (died && TryElevationHelper(target, dir))
+                // 只有"这个 exe 没有任何别的实例在跑"时才认为是我们启动失败、要走它自己的 elevate 助手。
+                // 单实例程序（DeepSeek Harness 这类）第二次启动会立刻退出，但它其实已经在跑，
+                // 以前这里会误判成失败，把程序提权拉起，窗口反而抓不回来。
+                int running = 0;
+                try { running = System.Diagnostics.Process.GetProcessesByName(Path.GetFileNameWithoutExtension(target)).Length; }
+                catch (Exception) { }
+                if (died && running == 0 && TryElevationHelper(target, dir))
                 {
                     Log.Info($"{name}: started directly then exited; relaunched through the app's own elevate helper");
                     await Task.Delay(2500).ConfigureAwait(false);
