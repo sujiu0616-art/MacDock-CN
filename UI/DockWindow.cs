@@ -1417,16 +1417,14 @@ internal sealed class DockWindow : Window
     void ActivateWindow(IntPtr hwnd) => WindowActions.Activate(hwnd);
     void Launch(DockItem item)
     {
-        if (item.IsStart)
+        // "默认以管理员启动"：开了就一律走提权路径（UAC 确认框由系统弹）
+        if (item.Config.RunAsAdmin && Launcher.CanRunAsAdmin(item))
         {
-            LaunchpadWindow.Open();
+            SetForegroundWindow(_hwnd);
+            Launcher.LaunchAsAdmin(item, _hwnd);
             return;
         }
-        if (string.IsNullOrEmpty(item.Target)) return;
-        // 后台线程启动：点击立刻返回，弹跳动画不会被 Process.Start / shell 解析卡住。
-        System.Threading.Tasks.Task.Run(() => Launcher.Launch(item));
-        if (!item.IsRunning) item.Bounce.Start(BounceKind.Launch, Now);
-        EnsureAnimating();
+        Launcher.Launch(item);
     }
 
     DockMenu BuildItemMenu(DockItem item)
@@ -1459,7 +1457,14 @@ internal sealed class DockWindow : Window
             if (item.Pinned)
             {
                 bool atStart = item.Config.OpenAtStart;
-                options.Add(Loc.T("Open at Login"), () =>
+                options.Add(Loc.T("Run as Administrator"), () =>
+            {
+                bool next = !item.Config.RunAsAdmin;
+                item.Config.RunAsAdmin = next;
+                _config.Save();
+                Log.Info($"Run as Administrator: {item.Name} = {next}");
+            }, item.Config.RunAsAdmin, true);
+            options.Add(Loc.T("Open at Login"), () =>
                 {
                     item.Config.OpenAtStart = !atStart;
                     _config.Save();

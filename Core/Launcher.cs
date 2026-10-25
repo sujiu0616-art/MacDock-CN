@@ -132,73 +132,35 @@ internal static class Launcher
     /// 启动之后收尾：有些客户端（bilibili）直接起 exe 会立刻 exit 0，要求经自己的
     /// resources\elevate.exe 拉起；起来之后主窗口又是隐藏的，要 SC_RESTORE 才显示。
     /// </summary>
+    /// <summary>
+    /// 启动后不再做任何"补救"动作：以前这里会在程序秒退时走它自带的 elevate 助手、
+    /// 再把"被藏起来的窗口"叫回来 —— 那是给 bilibili 打的补丁，但会误伤单实例程序
+    /// （第二次启动立刻退出的那种会被误判成失败并提权拉起，窗口反而抓不回来）。
+    /// 现在只负责把进程对象释放掉；要提权的程序请自己"以管理员身份运行"。
+    /// </summary>
     static void AfterLaunch(DockItem item, string target, System.Diagnostics.Process started)
     {
-        string dir = Path.GetDirectoryName(target) ?? "";
-        string name = item.Name;
         _ = System.Threading.Tasks.Task.Run(async () =>
         {
             try
             {
                 await Task.Delay(1500).ConfigureAwait(false);
-                bool died = false;
-                try { died = started.HasExited; } catch (Exception) { }
-                // 只有"这个 exe 没有任何别的实例在跑"时才认为是我们启动失败、要走它自己的 elevate 助手。
-                // 单实例程序（DeepSeek Harness 这类）第二次启动会立刻退出，但它其实已经在跑，
-                // 以前这里会误判成失败，把程序提权拉起，窗口反而抓不回来。
-                int running = 0;
-                try { running = System.Diagnostics.Process.GetProcessesByName(Path.GetFileNameWithoutExtension(target)).Length; }
+                try
+                {
+                    if (started.HasExited && started.ExitCode == 0)
+                        Log.Info($"{item.Name}: exited by itself right after start (exit 0)");
+                }
                 catch (Exception) { }
-                if (died && running == 0 && TryElevationHelper(target, dir))
-                {
-                    Log.Info($"{name}: started directly then exited; relaunched through the app's own elevate helper");
-                    await Task.Delay(2500).ConfigureAwait(false);
-                }
-
-                // 把它藏起来（或最小化）的主窗口叫回来
-                if (!WindowActions.SurfaceHiddenWindows(target))
-                {
-                    try
-                    {
-                        if (started.HasExited && started.ExitCode == 0)
-                            Log.Info($"{name}: exited by itself right after start (exit 0)");
-                    }
-                    catch (Exception) { }
-                }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, $"Finishing the launch of {name}");
+                Log.Error(ex, $"Finishing the launch of {item.Name}");
             }
             finally
             {
                 try { started.Dispose(); } catch (Exception) { }
             }
         });
-    }
-
-    /// <summary>目录里有 resources\elevate.exe 就用它拉起目标（bilibili 这类客户端要求这样做）。</summary>
-    static bool TryElevationHelper(string target, string dir)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(dir)) return false;
-            string helper = Path.Combine(dir, "resources", "elevate.exe");
-            if (!File.Exists(helper)) return false;
-            var psi = new ProcessStartInfo(helper)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = dir,
-                Arguments = "\"" + target + "\"",
-            };
-            Process.Start(psi)?.Dispose();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Launching through the app's own elevate helper");
-            return false;
-        }
     }
 
 }

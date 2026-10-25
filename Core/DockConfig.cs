@@ -67,6 +67,9 @@ internal sealed class DockItemConfig
 
     /// <summary>Launch the app when MacDock starts at sign-in ("Open at Login").</summary>
     public bool OpenAtStart { get; set; }
+
+    /// <summary>点这个项时始终以管理员身份启动（UAC 会弹一次确认）。</summary>
+    public bool RunAsAdmin { get; set; }
 }
 
 internal sealed class DockConfig

@@ -45,7 +45,13 @@ internal static class StripGuard
         || className.Contains("Compositor", StringComparison.OrdinalIgnoreCase)
         || className.Contains("PointerSource", StringComparison.OrdinalIgnoreCase)
         || className.Contains("Input", StringComparison.OrdinalIgnoreCase)
-        || className.Contains("DirectComposition", StringComparison.OrdinalIgnoreCase);
+        || className.Contains("DirectComposition", StringComparison.OrdinalIgnoreCase)
+        // 系统菜单/对话框/下拉列表：它们经常出现在屏幕左上角或右上角，藏了就等于"菜单打不开"
+        || className.StartsWith("#3276", StringComparison.OrdinalIgnoreCase)   // #32768 菜单 / #32769 桌面 / #32770 对话框
+        || className.Contains("tooltip", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("DropDown", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("ComboLBox", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Menu", StringComparison.OrdinalIgnoreCase);
     static WinEventProc? _proc;          // 必须保住委托，否则被 GC 回收
     static IntPtr _showHook, _moveHook;
     static RECT _strip;

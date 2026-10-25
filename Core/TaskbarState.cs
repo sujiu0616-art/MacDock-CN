@@ -15,7 +15,7 @@ internal static class TaskbarState
     const string PrimaryClass = "Shell_TrayWnd";
     const string SecondaryClass = "Shell_SecondaryTrayWnd";
 
-    sealed record Marker(int OriginalState, int OwnerPid);
+    sealed record Marker(int OriginalState, int OwnerPid, RECT? OriginalRect = null, bool Parked = false, int ParkOwnerPid = 0);
 
     static string MarkerPath => Path.Combine(DockConfig.Folder, "taskbar.json");
 
@@ -129,12 +129,123 @@ internal static class TaskbarState
         return true;
     }
 
+    // ── 把任务栏"停到屏幕外"（ABM_SETPOS）────────────────────────────────
+    // 停车的意义：任务栏窗口继续存在（依赖它的程序全部照常），但它被移到屏幕外，
+    // 既不会冒出来跟 Dock 抢位置，也不需要靠"鼠标贴底边才滑出"那种自动隐藏。
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct APPBARDATA
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public RECT rc;
+        public int lParam;
+    }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll")]
+    static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    const uint SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010, SWP_SHOWWINDOW = 0x0040;
+    const uint ABM_GETTASKBARPOS = 0x00000005;
+    const uint ABM_SETPOS = 0x00000003;
+
+    /// <summary>把 Explorer 的任务栏停到屏幕外（保留窗口，只是移走）。</summary>
+    static bool IsParkedMarker() => ReadMarker() is { Parked: true };
+
+    public static bool ParkOffscreen()
+    {
+        var tray = FindExplorerTray();
+        if (tray == IntPtr.Zero) return false;
+
+        using (Lock())
+        {
+            var marker = ReadMarker();
+            int pid = Environment.ProcessId;
+            if (marker is null || marker.OwnerPid != pid || !marker.Parked)
+            {
+                var data = new APPBARDATA { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<APPBARDATA>(), hWnd = tray };
+                SHAppBarMessage(ABM_GETTASKBARPOS, ref data);
+                var original = data.rc;
+                int state = GetState(tray);
+                WriteMarker(new Marker(state, pid, original, Parked: true, ParkOwnerPid: pid));
+                AutoStart.SetRestoreFallback(true);
+                Log.Info($"Taskbar parked offscreen (original rect {original.Left},{original.Top} {original.Width}x{original.Height})");
+            }
+            // 先确保不会被自动隐藏"救"回画面里
+            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
+            PersistAutoHide(false);
+            MoveAway(tray);
+        }
+        return true;
+    }
+
+    /// <summary>把任务栏挪回原位置（hotkey / 退出 / --restore-taskbar 都走这里）。</summary>
+    public static bool Unpark()
+    {
+        var marker = ReadMarker();
+        var tray = FindExplorerTray();
+        if (tray == IntPtr.Zero) return false;
+
+        var data = new APPBARDATA { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<APPBARDATA>(), hWnd = tray };
+        SHAppBarMessage(ABM_GETTASKBARPOS, ref data);
+        var target = marker?.OriginalRect ?? data.rc;
+
+        SHAppBarMessage(ABM_SETPOS, ref data);
+        data.rc = target;
+        SHAppBarMessage(ABM_SETPOS, ref data);
+        SetWindowPos(tray, IntPtr.Zero, target.Left, target.Top, target.Width, target.Height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        Log.Info($"Taskbar unparked to ({target.Left},{target.Top}) {target.Width}x{target.Height}");
+        return true;
+    }
+
+    /// <summary>当前是否处于"停在屏幕外"的状态。</summary>
+    public static bool IsParked()
+    {
+        var tray = FindExplorerTray();
+        if (tray == IntPtr.Zero) return false;
+        var data = new APPBARDATA { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<APPBARDATA>(), hWnd = tray };
+        SHAppBarMessage(ABM_GETTASKBARPOS, ref data);
+        return data.rc.Top >= ScreenBottom() - 4 || data.rc.Left >= ScreenRight() - 4;
+    }
+
+    static int ScreenBottom()
+    {
+        var display = Displays.ByNameOrPrimary(null);
+        return display.Bounds.Bottom;
+    }
+
+    static int ScreenRight()
+    {
+        var display = Displays.ByNameOrPrimary(null);
+        return display.Bounds.Right;
+    }
+
+    static void MoveAway(IntPtr tray)
+    {
+        var data = new APPBARDATA { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<APPBARDATA>(), hWnd = tray };
+        SHAppBarMessage(ABM_GETTASKBARPOS, ref data);
+        int bottom = ScreenBottom(), right = ScreenRight();
+        // 停到屏幕下方 4000px：系统认为它还在（appbar 仍注册），但屏幕上完全看不到
+        var offscreen = new RECT { Left = 0, Top = bottom + 4000, Right = data.rc.Width, Bottom = bottom + 4000 + data.rc.Height };
+        data.rc = offscreen;
+        SHAppBarMessage(ABM_SETPOS, ref data);
+        SetWindowPos(tray, IntPtr.Zero, offscreen.Left, offscreen.Top, offscreen.Width, offscreen.Height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    }
+
     /// <summary>Cheap re-check while hidden: hides any taskbar Windows has shown again.</summary>
     public static void Enforce()
     {
         var tray = FindExplorerTray();
         if (tray == IntPtr.Zero) return;
         // Someone (the user, Settings, a guard that saw a stale owner) turned auto-hide off.
+        if (IsParkedMarker()) { MoveAway(tray); return; }
         if ((GetState(tray) & ABS_AUTOHIDE) == 0) Hide();
         else HideWindows(tray); // covers a taskbar Explorer re-created elsewhere
     }
@@ -162,6 +273,7 @@ internal static class TaskbarState
                 SetState(tray, marker.OriginalState);
                 PersistAutoHide((marker.OriginalState & ABS_AUTOHIDE) != 0);
             }
+            if (marker is { Parked: true }) Unpark();
             foreach (var h in ExplorerTaskbarWindows()) ShowWindow(h, SW_SHOWNA);
             DeleteMarker();
             AutoStart.SetRestoreFallback(false);
