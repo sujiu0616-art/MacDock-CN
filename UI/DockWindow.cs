@@ -2095,7 +2095,11 @@ internal sealed class DockWindow : Window
     };
 
     DateTime _fullscreenWantedSince = DateTime.MinValue;
-    const double FullscreenDebounceSeconds = 3.0;   // 只有"持续 3 秒"的全屏才算数（开机时有 2~3 秒的临时全屏窗口）
+    // 收起前的确认时间。早期是 1.5s（挡开机临时全屏），后来为了压误判加到 3s；
+    // 但误判的真因（最大化窗口 / 铺满工作区 / 直接采信 ABN_FULLSCREENAPP）都已各自修好，
+    // 3s 只会让播放器全屏时 Dock 迟迟不收起（实测用户直接感知为"消失得很慢"）。
+    // 现在 0.25s：既不会误收，又基本无感。
+    const double FullscreenDebounceSeconds = 0.25;
 
     /// <summary>
     /// 收起 / 放回 Dock 与菜单栏。
@@ -2206,7 +2210,8 @@ internal sealed class DockWindow : Window
         if (!GetWindowRect(foreground, out var rect)) return false;
         var display = CurrentDisplay();
         var bounds = display.Bounds;
-        const int tolerance = 2;
+        // 8px 容差：有些播放器全屏会留 1~4px 边框，2px 会漏判（Dock 迟迟不收）
+        const int tolerance = 8;
 
         // 最大化的普通窗口即使铺满整屏也不算全屏应用：开机后某些程序以最大化状态恢复，
         // 以前会被判定成"有全屏应用"而把 Dock 收起来（要等一次点击才回来）。
