@@ -306,7 +306,8 @@ internal sealed class MenuBarWindow : Window
                     SchedulePlace();
                     break;
                 case ABN_FULLSCREENAPP:
-                    OnFullscreenApp(lParam != IntPtr.Zero);
+                    // 统一由 Dock 的检测驱动（MenuBars.SetFullscreen）；这里独立处理会导致
+                    // "菜单栏藏了、Dock 还在"的割裂画面。
                     break;
             }
         }
@@ -331,16 +332,6 @@ internal sealed class MenuBarWindow : Window
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             SchedulePlace();
         }
-    }
-
-    void OnFullscreenApp(bool fullscreen)
-    {
-        if (fullscreen && !Displays.IsFullscreenAppOn(_hwnd)) return;
-        SetFullscreen(fullscreen);
-    }
-
-    void UnusedFullscreenBody(bool fullscreen)
-    {
     }
 
     // ───────────────────────── Content ─────────────────────────

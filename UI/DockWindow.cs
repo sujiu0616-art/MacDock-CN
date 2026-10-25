@@ -233,6 +233,9 @@ internal sealed class DockWindow : Window
             CheckDisplays();
         };
         // 兼容模式：原生任务栏被唤出时不和 Dock 抢位置 —— 先让开，它收回去再放回来。
+        // 不变量：_fullscreen 为真 → Dock/玻璃板/菜单栏都必须藏着；为假 → 都必须显示。
+        // 任何一条路径（ABN 通知、让位、兜底显示…）想偷偷改状态，这里 500ms 内拉回一致。
+        _fullscreenCheck.Tick += (_, _) => EnforceFullscreenInvariant();
         _fullscreenCheck.Tick += (_, _) => SuppressForNativeTaskbar(NativeTaskbarShown());
         _fullscreenCheck.Tick += (_, _) =>
         {
@@ -2099,6 +2102,31 @@ internal sealed class DockWindow : Window
     }
 
     /// <summary>Like the Dock, step aside while a full-screen app (video, game, presentation) is in front.</summary>
+    /// <summary>把"全屏时该藏的都藏、不该藏的都不藏"这件事强制成不变量。</summary>
+    void EnforceFullscreenInvariant()
+    {
+        if (_launchpadOpen || _hwnd == IntPtr.Zero) return;
+        bool hide = _fullscreen;
+        bool dockVisible = IsWindowVisible(_hwnd);
+
+        if (hide && dockVisible)
+        {
+            ShowWindow(_hwnd, SW_HIDE);
+            _backdrop.SetVisible(false);
+            Log.Info("Fullscreen invariant: dock was visible, hid it");
+        }
+        else if (!hide && !dockVisible && !_suppressedByNativeTaskbar)
+        {
+            ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            if (_backdrop is not null) _backdrop.SetVisible(true);
+            UpdateFrame();
+            Log.Info("Fullscreen invariant: dock was hidden, showed it");
+        }
+
+        _menuBars?.SetFullscreen(hide);   // 幂等：菜单栏内部会自己判断是否已经一致
+    }
+
     bool _suppressedByNativeTaskbar;
 
     /// <summary>Explorer 的任务栏窗口当前是否可见（自动隐藏模式下被鼠标唤出来时会可见）。</summary>
@@ -2247,6 +2275,21 @@ internal sealed class DockWindow : Window
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool GetWindowPlacement(IntPtr hwnd, ref Placement placement);
 
+    /// <summary>
+    /// 结构性"全屏"判据：窗口压进菜单栏那条与 Dock 那条各一半以上。
+    /// 最大化窗口刚好停在这两条之外，一定不合格；留几像素边的真全屏合格。
+    /// </summary>
+    static bool IsFullscreenRect(RECT rect, RECT bounds, RECT work)
+    {
+        int topStrip = Math.Max(1, work.Top - bounds.Top);        // 菜单栏那条（39px @150%）
+        int bottomStrip = Math.Max(1, bounds.Bottom - work.Bottom); // Dock 那条（119px）
+        const int sideTolerance = 8;
+        return rect.Top <= bounds.Top + topStrip / 2
+               && rect.Bottom >= bounds.Bottom - bottomStrip / 2
+               && rect.Left <= bounds.Left + sideTolerance
+               && rect.Right >= bounds.Right - sideTolerance;
+    }
+
     /// <summary>窗口是否处于"最大化"状态（SW_SHOWMAXIMIZED = 3）。</summary>
     static bool IsMaximized(IntPtr hwnd)
     {
@@ -2311,21 +2354,13 @@ internal sealed class DockWindow : Window
         var display = CurrentDisplay();
         var bounds = display.Bounds;
         // 8px 容差：有些播放器全屏会留 1~4px 边框，2px 会漏判（Dock 迟迟不收）
-        const int tolerance = 8;
+        // "最大化"!= "全屏"：
+        // · 最大化窗口的矩形 == 工作区（顶边让开菜单栏、底边让开 Dock），不算全屏；
+        // · 浏览器 F11 / GTK 全屏后 showCmd 可能仍报 SW_SHOWMAXIMIZED，但窗口压住了两条 appbar → 算全屏。
+        if (IsMaximized(foreground) && !IsFullscreenRect(rect, bounds, display.Work)) return false;
 
-        // 最大化的普通窗口即使铺满整屏也不算全屏应用：开机后某些程序以最大化状态恢复，
-        // 以前会被判定成"有全屏应用"而把 Dock 收起来（要等一次点击才回来）。
-        if (IsMaximized(foreground)) return false;
-
-        // 情况一：盖住整块屏（含 appbar 那两条）= 无边框全屏 / 全屏游戏
-        if (rect.Left <= bounds.Left + tolerance && rect.Top <= bounds.Top + tolerance
-            && rect.Right >= bounds.Right - tolerance && rect.Bottom >= bounds.Bottom - tolerance)
-            return true;
-
-        // 只有"盖住整块屏"才算全屏。原来还有一条"无标题栏 + 铺满工作区"，被联想电脑管家的
-        // 开机 H5 弹窗（pcm_h5_msg，2559x1433 @ (0,39)，正好铺满工作区）误判，导致开机时
-        // Dock 与菜单栏被收起十几秒。播放器真正的全屏仍然会被识别。
-        return false;
+        // 结构性判据：压进"菜单栏那条"与"Dock 那条"各一半以上才算全屏
+        return IsFullscreenRect(rect, bounds, display.Work);
     }
 
     /// <summary>--menu：在固定位置弹一个样例菜单（只用于截图验收外观）。</summary>
