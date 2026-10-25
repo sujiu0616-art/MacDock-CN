@@ -69,6 +69,7 @@ internal sealed class DockWindow : Window
     readonly TextBlock _labelText;
     readonly DockLayout _layout = new();
     readonly Stopwatch _clock = Stopwatch.StartNew();
+    readonly Stopwatch StartupTiming = Stopwatch.StartNew();   // startup phase timing
     readonly DispatcherTimer _revealTimer;
     readonly DispatcherTimer _hideTimer;
 
@@ -288,18 +289,28 @@ internal sealed class DockWindow : Window
         _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
         _quitMessage = RegisterWindowMessage(CommandLine.QuitMessageName);
 
-        // The menu bar first: its tray service (ManagedShell) has to hook Explorer's notification
-        // area while it is still on screen, otherwise the icons never reach us. Only then take the
-        // taskbar away, so the dock can claim the space it leaves.
-        if (_config.Settings.MenuBar) ShowMenuBar();
 
-        _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
-        _replacer.Start();
         _taskbarHotkey = Hotkey.Register(_hwnd, TaskbarHotkeyId, _config.Settings.TaskbarHotkey);
 
         _appBar = new AppBar(_hwnd);
         _appBar.Register();
         _explorerPid = TaskbarState.ExplorerProcessId();
+        _displayLayout = Displays.Layout();
+        Place();
+
+        // 这两件是启动里最慢的（托盘挂钩 ≈400ms、隐藏任务栏几十 ms），放到首帧渲染之后再跑：
+        // 用户先看到 Dock，再看到任务栏消失。顺序仍是"先挂托盘，再隐藏任务栏"（反了图标会丢）。
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_config.Settings.MenuBar) ShowMenuBar();
+            long afterMenuBar = StartupTiming.ElapsedMilliseconds;
+
+            _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
+            _replacer.Start();
+            long afterTaskbar = StartupTiming.ElapsedMilliseconds;
+            Log.Info($"StartupTiming: menuBar={afterMenuBar}ms taskbarHidden={afterTaskbar}ms deferred=yes");
+        }), System.Windows.Threading.DispatcherPriority.Background);
+
 
         if (_config.Settings.NumberShortcuts) _numberShortcuts = new NumberShortcuts(OnNumberShortcut);
         StartTrashWatch();
@@ -310,6 +321,7 @@ internal sealed class DockWindow : Window
         _tracker.Activated += OnWindowActivated;
         _tracker.AttentionRequested += OnAttentionRequested;
         SyncWindows();
+        long afterTracker = StartupTiming.ElapsedMilliseconds;
         if (Environment.GetCommandLineArgs().Contains("--diag")) StartDiagnostics();
 
         // Lock, user switch (session), sleep and screen off (power): pause, then check everything again.
@@ -317,8 +329,7 @@ internal sealed class DockWindow : Window
         var displayState = GUID_CONSOLE_DISPLAY_STATE;
         _powerNotify = RegisterPowerSettingNotification(_hwnd, ref displayState, 0);
 
-        _displayLayout = Displays.Layout();
-        Place();
+        Log.Info($"StartupTiming: windows={afterTracker}ms placedEarly=yes");
         UpdateFollowTimer();
         if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) LaunchOpenAtStartItems();
 
@@ -329,6 +340,7 @@ internal sealed class DockWindow : Window
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
+        Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms");
         Place();
     }
 
