@@ -46,6 +46,12 @@ internal static class StripGuard
         || className.Contains("PointerSource", StringComparison.OrdinalIgnoreCase)
         || className.Contains("Input", StringComparison.OrdinalIgnoreCase)
         || className.Contains("DirectComposition", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Intermediate", StringComparison.OrdinalIgnoreCase)   // Chromium "Intermediate D3D Window"
+        || className.Contains("D3D", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("GPU", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Surface", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Layer", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Chromium", StringComparison.OrdinalIgnoreCase)
         // 系统菜单/对话框/下拉列表：它们经常出现在屏幕左上角或右上角，藏了就等于"菜单打不开"
         || className.StartsWith("#3276", StringComparison.OrdinalIgnoreCase)   // #32768 菜单 / #32769 桌面 / #32770 对话框
         || className.Contains("tooltip", StringComparison.OrdinalIgnoreCase)
@@ -140,6 +146,9 @@ internal static class StripGuard
             // · 尺寸小（<= 400x120）—— 最大化窗口、正常应用窗口一律不动
             // · 顶边与条相交
             // 实测火狐那个窗口尺寸会变（135x37 与 202x56 都出现过），不能要求"完全落在条里"。
+            // 太小的窗口一律不碰：Chromium/Electron 的 GPU 合成表面常是 1×1，
+            // 藏掉它 → 应用白屏（消息循环还在，所以按钮仍能点）。真正的"赖在条上的小窗"都远大于这个阈值。
+            if (rect.Width < 40 || rect.Height < 20) return false;
             if (rect.Width > 400 || rect.Height > 120) return false;
             if (rect.Top > _strip.Bottom) return false;
             if (rect.Bottom < _strip.Top) return false;
@@ -150,6 +159,15 @@ internal static class StripGuard
 
             string className = GetClassName(hwnd);
             if (IsProtected(className)) return false;   // 浏览器合成器 / 系统输入窗：碰了就黑屏
+
+            // 通用分支只处理"有标题"的窗口（火狐那个是 title='Battery Watcher'）；
+            // 技术窗口（GPU 表面、输入窗、隐藏宿主）标题都是空的，不碰。
+            if (!KnownStrays.Contains(className))
+            {
+                var titleBuffer = new System.Text.StringBuilder(128);
+                _ = GetWindowText(hwnd, titleBuffer, titleBuffer.Capacity);
+                if (titleBuffer.Length == 0) return false;
+            }
 
             // 白名单优先：已知的小窗直接藏，其余的只按"小且与条相交"处理（尺寸限制见上）
             // 系统外壳类不碰：桌面、任务栏、输入法候选、开始菜单宿主、通知宿主
