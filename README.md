@@ -1,216 +1,73 @@
-<div align="center">
+# MacDock-CN · macOS 风格任务栏（Windows 11 中文二创版）
 
-<img src="docs/assets/social-preview.png" alt="MacDock: a real Dock for Windows 11" width="880">
+> **这是一个二创（derivative work）项目。**
+> 上游：[**lupanostefano/MacDock**](https://github.com/lupanostefano/MacDock)（MIT License，© 2026 Stefano Lupano）。
+> 本项目在其基础上做了大量修改，**不是**上游官方版本，与上游作者无关；问题请提到本仓库，不要打扰上游。
 
-<br><br>
+把 Windows 11 的任务栏换成一个 macOS Tahoe 风格的外壳：底部 Dock + 顶部菜单栏 + 启动台，
+并且**接管**（隐藏）Windows 原生任务栏。
 
-[![Download](https://img.shields.io/badge/download-latest%20release-ff5fa8?style=for-the-badge&logo=windows11&logoColor=white)](https://github.com/lupanostefano/MacDock/releases/latest)
-&nbsp;
-[![Website](https://img.shields.io/badge/website-lupanostefano.github.io%2FMacDock-6d5dfc?style=for-the-badge)](https://lupanostefano.github.io/MacDock/)
-&nbsp;
-[![Support on Ko-fi](https://img.shields.io/badge/buy%20me%20a%20coffee-ko--fi-ff5f7a?style=for-the-badge&logo=kofi&logoColor=white)](https://ko-fi.com/hikari22)
+---
 
-[![CI](https://github.com/lupanostefano/MacDock/actions/workflows/ci.yml/badge.svg)](https://github.com/lupanostefano/MacDock/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/lupanostefano/MacDock/actions/workflows/codeql.yml/badge.svg)](https://github.com/lupanostefano/MacDock/actions/workflows/codeql.yml)
-![Windows 11](https://img.shields.io/badge/Windows-11-0078d4?style=flat-square&logo=windows11&logoColor=white)
-![.NET 9](https://img.shields.io/badge/.NET-9-512bd4?style=flat-square&logo=dotnet&logoColor=white)
-![License: MIT](https://img.shields.io/badge/license-MIT-2ea043?style=flat-square)
-![Idle CPU](https://img.shields.io/badge/idle%20CPU-~0.15%25-8957e5?style=flat-square)
+## 相对上游做了什么
 
-**A real Dock for Windows.**<br>
-It replaces the taskbar, magnifies like a Mac's, flows windows into their icons like a genie,<br>
-and hands the taskbar back the second it stops, whatever way it stops.
-
-<br>
-
-<a href="https://ko-fi.com/hikari22"><img src="docs/assets/support-banner.png" alt="Enjoying MacDock? Buy me a coffee on Ko-fi" width="760"></a>
-
-</div>
-
-<br>
-
-<p align="center">
-  <img src="docs/assets/desktop.png" alt="MacDock on a Windows 11 desktop: menu bar on top, magnified Dock at the bottom" width="920">
-</p>
-
-## Why it exists
-
-Windows docks usually come in two flavours: an app-launcher strip floating over the taskbar, or a skin that fakes the look with a flat translucent window. MacDock is neither. It is an **app bar** that takes the taskbar's place in the shell: maximized windows stop above it, the Windows taskbar is switched off while it runs, and the tray icons move to a **menu bar** across the top of the screen.
-
-It is also built to be **hard to get stuck with**. Replacing the taskbar means that if the replacement dies, you have no taskbar. MacDock treats that as the main problem to solve, not a footnote (see [Safe by construction](#safe-by-construction)).
-
-## What you get
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### Real Windows 11 acrylic
-The plate is a separate, non-layered window with the **DWM system backdrop** and antialiased rounded corners: the same acrylic the shell uses, not a tinted rectangle. It follows light and dark mode and re-applies itself after sleep and lock.
-
-</td>
-<td width="50%" valign="top">
-
-### Wave magnification
-Icons grow under the pointer in a smooth wave, anchored so the icon you are aiming at stays where it is. Labels, running dots, a bounce on launch and a bounce when an app asks for attention.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### Genie effect, on the GPU
-Minimize and restore from the Dock flow the real window through a funnel into its icon. Drawn with Direct3D 11 and DirectComposition, one frame per screen refresh (measured at **280 fps on a 280 Hz monitor**, tens of milliseconds of CPU per animation).
-
-</td>
-<td valign="top">
-
-### A menu bar
-Active app name, Start on the logo, your **tray icons** (clicks, double-clicks and menus reach the apps as they would from the taskbar), Wi-Fi with signal strength, volume, battery, date and time. One bar per monitor.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-### Edit it with your hands
-Drag to reorder. Drag an icon out and it disappears in a puff of smoke. Drop any program, shortcut, folder or **This PC / Control Panel** on it to pin it. Folders become **stacks**. The Recycle Bin is a real one.
-
-</td>
-<td valign="top">
-
-### Multi-monitor and DPI
-Put the Dock on any screen, or push the pointer against the bottom edge of another one and it follows, as on a Mac. Sizes are computed per monitor scale. Sleep, lock, user switch and monitor changes are handled.
-
-</td>
-</tr>
-</table>
-
-<p align="center">
-  <img src="docs/assets/magnify.gif" alt="Magnification sweeping across the Dock" width="760">
-</p>
-
-<p align="center">
-  <img src="docs/assets/genie.gif" alt="A window minimizing into its Dock icon and coming back" width="760">
-</p>
-
-## Safe by construction
-
-The taskbar comes back. Every time.
-
-| What happens | What MacDock does |
+| 分类 | 改动 |
 | --- | --- |
-| You quit it | Restores the taskbar exactly as you had it (auto-hide state included). |
-| It crashes | `MacDockGuard.exe`, a separate process it keeps alive, sees it die and restores the taskbar. |
-| You kill it from Task Manager, or kill the whole process tree | The guard is deliberately **not** a child process, so it survives and restores. |
-| You shut down or sign out | The taskbar is given back *while Explorer still exists* (`WM_QUERYENDSESSION`), and hidden again if the shutdown is cancelled. |
-| Power cut or forced restart while hidden | A `RunOnce` entry restores it at the next sign-in unless a running MacDock is keeping it hidden. |
-| Explorer restarts | MacDock notices the new Explorer, hides the new taskbar and registers again. |
-| You just want it back for a minute | **Ctrl + Alt + Shift + B** toggles the Windows taskbar. |
-| Something is really wrong | `MacDock.exe --restore-taskbar` (the emergency switch, works without the dock running). |
+| 中文化 | 全量简体中文文案（63 条）；字体栈改用 `Segoe UI Variable + 微软雅黑 UI`，并统一 `TextFormattingMode=Display` + 灰度抗锯齿，150% 缩放下小字不再发虚 |
+| 启动台（新增） | 扫描开始菜单 → 过滤发行版/噪声/系统工具（197 → 77 个应用）；拼音首字母 + 子序列搜索；分页 + 滚动翻页；**扫描结果缓存**（打开 ~0.4s）；`F4` 开关 |
+| 输入法 | 菜单栏新增"中/英"指示器（`ImmGetConversionStatus`），左键切换、右键选择输入法 |
+| 真透明 | 放弃 DWM 系统背景材料与 accent 模糊（在这台机器上会渲染成不透明灰板），Dock 板 / 菜单栏改成逐像素 alpha 的分层窗口 |
+| 启动体验 | 两段式启动（先 `--hide-taskbar` 收掉原生任务栏，再起 Dock）；开机时 Dock 从屏幕底边**上滑 380ms**；可选开机预热（SYSTEM 计划任务预读 ~45 个 DLL） |
+| 全屏处理 | 只有"盖住整块屏"的窗口才收起 Dock/菜单栏；排除最大化窗口、Alt+Tab 任务视图、OEM 弹窗（联想电脑管家等） |
+| 性能 | 空闲 CPU 46% → 0.8%；私有内存 622MB → ~120MB；去掉 genie 动画与全部软件光栅化效果；图标解码 256→176px |
+| 行为修正 | 单实例程序（开始即退出的情况）不再误提权；托盘程序（任务管理器/播放器）用 `SC_RESTORE` 叫回窗口；右键菜单自绘 + 低级鼠标钩子关闭 |
+| 部署 | 框架依赖发布 + `MacDock.vbs` 设 `DOTNET_ROOT` 的静默启动器；自启动走 Run 键 + 登录计划任务；一键 `uninstall.ps1` 还原任务栏 |
 
-## Install
+## 构建
 
-<img src="docs/assets/installer-side.png" alt="The MacDock setup" width="150" align="right">
+需要 .NET 9 SDK（Windows）。
 
-**Setup (recommended).** Download `MacDock-<version>-setup.exe` from [Releases](https://github.com/lupanostefano/MacDock/releases/latest) and run it.
-
-- Installs for your account only: no administrator rights needed.
-- Checks for the .NET 9 Desktop Runtime and, if it is missing, downloads it from Microsoft for you.
-- Lets you choose "start with Windows" and a desktop shortcut, in English or Italian.
-- Adds a *Restore the Windows taskbar* shortcut to the Start menu, just in case.
-- **Updating:** run the new setup. A running MacDock is closed (taskbar handed back for the moment), updated and started again.
-- **Uninstalling** quits the Dock, gives the taskbar back and removes the start-up entries, before deleting anything. Your settings stay in `%APPDATA%\MacDock` for a later reinstall.
-- Silent install for IT: `MacDock-<version>-setup.exe /VERYSILENT /CURRENTUSER /TASKS="autostart"`.
-
-**Portable.** `MacDock-<version>-win-x64-portable.zip`: unzip anywhere, install the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) if needed, run `MacDock.exe`. To remove it: `MacDock.exe --uninstall`, then delete the folder.
-
-Right-click an empty spot of the Dock for **Settings**, "Start with Windows" and the taskbar switch.
-
-> **Heads up:** the binaries are not code-signed yet, so SmartScreen may warn on first run. Every release lists SHA-256 sums and carries [build provenance](https://github.com/lupanostefano/MacDock/attestations) from GitHub Actions (`gh attestation verify <file> -R lupanostefano/MacDock`), so you can check the file was built from this repository.
-
-Requires Windows 11 x64 (developed and tested on build 26200).
-
-## Using it
-
-| | |
-| --- | --- |
-| Click an icon | Launch. If running: bring forward, or minimize if already in front (several windows: next one). |
-| Shift + click, middle click | New window / new instance. |
-| Right-click an icon | Recent files, windows, *Keep in Dock*, *Open at login*, *Show in Explorer*, *Quit*. |
-| Right-click an empty spot | Settings, taskbar switch, menu bar, start with Windows. |
-| Drag an icon along the Dock | Reorder. Drag it away: remove. |
-| Drop a file or folder on the Dock | Pin it (a folder becomes a stack). |
-| Win + 1 … 9 | The n-th app of the Dock, like the taskbar. |
-| Click the Start icon / the menu bar logo | Start menu. Right-click: the Win + X menu. |
-
-## Configuration
-
-Everything is in the Settings window and saved at once to `%APPDATA%\MacDock\config.json`. Logs: `%APPDATA%\MacDock\log.txt` (add `--diag` for more).
-
-| Setting | Default | |
-| --- | --- | --- |
-| `IconSize` / `MagnifiedSize` / `Magnification` | 48 / 80 / on | Sizes in device-independent pixels. |
-| `Edge` | `Bottom` | `Bottom`, `Left` or `Right`. |
-| `AutoHide` | off | Slides away until the pointer touches the edge. |
-| `Display` | primary | Which monitor holds the Dock (`\\.\DISPLAY2`). |
-| `FollowPointer` | on | The Dock follows the pointer to another monitor's edge. |
-| `Genie` | on | The genie effect. |
-| `ReplaceTaskbar` | on | Hide the Windows taskbar while MacDock runs. |
-| `MenuBar` / `MenuBarOnAllDisplays` | on / on | The menu bar. |
-| `NumberShortcuts` | on | Win + 1 … 9. |
-| `StartWithWindows` | on | Starts at sign-in without the usual delay, through a scheduled task. |
-
-## Build from source
-
-```bash
-git clone https://github.com/lupanostefano/MacDock.git
-cd MacDock
-dotnet test MacDock.slnx     # .NET 9 SDK: builds the app and runs the unit tests
-bin\Debug\net9.0-windows\MacDock.exe
+```powershell
+# 在仓库根目录执行
+dotnet build MacDock.csproj -c Release
+dotnet publish MacDock.csproj -c Release --self-contained false -o dist\MacDock
 ```
 
-`MacDock.exe --selftest` checks the parts that need no window (displays, language, layout, shell icons). The installer is `installer/MacDock.iss` ([Inno Setup 6](https://jrsoftware.org/isinfo.php)); the icon and the installer art are drawn from `art/` by `tools/make-icon.ps1` and `tools/make-installer-art.ps1`.
+> ⚠️ **不要用 self-contained / ReadyToRun 发布**：实测会导致 ManagedShell 托盘初始化失败
+> （`Notification area: failed to start`，托盘图标全丢）。框架依赖 + VBS 启动器是验证过的组合。
 
-**Every change goes through CI** ([`.github/workflows`](.github/workflows)): Debug and Release builds with warnings as errors, a formatting check, the unit tests, the self-test of the built app, the installer build, CodeQL, and a check that no commit credits an AI assistant as author. The installer is also exercised like a user would: silent install, self-test of the installed copy, uninstall, and a check that nothing is left behind (`tools/test-install.ps1`). A tag `vX.Y.Z` runs all of it again and publishes the release with the installer, the portable zip, checksums and provenance. See [CONTRIBUTING.md](CONTRIBUTING.md).
+## 安装 / 卸载
 
-The interesting parts of the code:
+```powershell
+# 安装（复制到 %LOCALAPPDATA%\MacDock、写启动器、设自启、接管任务栏）
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1
 
-- `Interop/AppBar.cs`, `Core/TaskbarState.cs`, `Core/TaskbarReplacer.cs`, `Core/Guard.cs`: registering as an app bar, hiding and restoring the taskbar, the guard process.
-- `UI/DockWindow.cs`, `Core/DockLayout.cs`: input, animation, the magnification wave.
-- `UI/BackdropWindow.cs`, `UI/AcrylicWindow.cs`: the DWM acrylic plate.
-- `Core/Genie.cs`: the genie (Direct3D 11 + DirectComposition through [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows)).
-- `UI/MenuBars.cs`, `UI/TrayIconsPanel.cs`: menu bars; the tray comes from [ManagedShell](https://github.com/cairoshell/ManagedShell).
+# 卸载并还原 Windows 任务栏
+powershell -ExecutionPolicy Bypass -File .\tools\uninstall.ps1 -RestoreTaskbar
+```
 
-More detail (in Italian, for now): [docs/technical-notes.it.md](docs/technical-notes.it.md).
+紧急还原（不进 UI）：
 
-## Limits, honestly
+```powershell
+%LOCALAPPDATA%\MacDock\app\MacDock.exe --restore-taskbar
+```
 
-- The interface is available in English and Italian (it follows the language of Windows, or pick one in Settings). Other languages are welcome as pull requests: the texts live in one file, `Core/Loc.cs`.
-- The genie plays for minimize and restore started **from the Dock**. Minimizing with a window's own button still uses Windows' animation.
-- Taskbar features that live inside Explorer's own window have no public API and are not reproduced: progress bars and badges on icons, custom jump-list tasks (recent files are shown).
-- Quick Settings (Win + A) and Notifications (Win + N) always open at the bottom right, where Windows thinks the taskbar is.
-- Built and tested on one Windows 11 PC. Multi-monitor and non-100% scaling are implemented but have had far less testing than the rest: [open an issue](https://github.com/lupanostefano/MacDock/issues) if something is off.
+## 快捷键
 
-## Roadmap
+| 按键 | 作用 |
+| --- | --- |
+| `F4` | 打开/关闭启动台（可在 `%APPDATA%\MacDock\config.json` 的 `LaunchpadKey` 改虚拟键码） |
+| `Ctrl+Alt+Shift+B` | 临时显示/隐藏 Windows 原生任务栏（`TaskbarHotkey`） |
+| `Shift + 点菜单栏徽标` | 原生开始菜单（左键默认是启动台，右键是 Win+X） |
 
-- [x] Dock, menu bar, taskbar replacement, guard process, multi-monitor, genie
-- [x] English and Italian interface, with a language setting
-- [ ] Signed binaries and a Microsoft Store package
-- [ ] Genie for minimize from the window's own button
+## 已知限制
 
-## Support
+- 全屏大小的分层窗口在部分 Windows 版本上没有逐像素合成，因此**启动台用的是接近实底的配色**（macOS "降低透明度"观感），Dock 与菜单栏是真半透明。
+- Copilot 键由厂商/系统在更底层处理，低级键盘钩子收不到，无法绑定。
+- 开机首帧仍有 ~1.3–5.7s 的 .NET/WPF 冷装载（加开机预热任务可压到 ~1.3s，但抢不抢得到磁盘看运气）。
 
-MacDock is free, open source and has no ads. If it made your Windows a little nicer, a coffee keeps it going:
-[**ko-fi.com/hikari22**](https://ko-fi.com/hikari22) (or the *Sponsor* button at the top of this page).
+## 许可
 
-<a href="https://ko-fi.com/hikari22"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support MacDock on Ko-fi" height="36"></a>
-
-Bug reports and ideas are just as welcome: [open an issue](https://github.com/lupanostefano/MacDock/issues/new/choose).
-
-## License
-
-[MIT](LICENSE). Third-party components are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-
-MacDock is an independent project. It is not affiliated with, endorsed by, or sponsored by Apple Inc. or Microsoft. The icon and every graphic in this repository are original.
-
+MIT。上游版权归 **Stefano Lupano**；本二创部分的修改版权归 **sujiu0616-art**。
+详见 [`LICENSE`](LICENSE) 与 [`NOTICE.md`](NOTICE.md)。
+第三方组件（ManagedShell 等）见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。

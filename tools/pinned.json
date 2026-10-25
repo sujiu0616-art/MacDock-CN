@@ -1,0 +1,70 @@
+{
+    "pinned":  [
+                   {
+                       "Name":  "启动台",
+                       "Target":  "gravitone:start"
+                   },
+                   {
+                       "Name":  "微信",
+                       "Target":  "D:\\weixin\\Weixin.exe"
+                   },
+                   {
+                       "Name":  "QQ",
+                       "Target":  "D:\\qq\\QQ.exe"
+                   },
+                   {
+                       "Name":  "Telegram",
+                       "Target":  "D:\\Telegram Desktop\\Telegram.exe"
+                   },
+                   {
+                       "Name":  "Chrome",
+                       "Target":  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+                   },
+                   {
+                       "Name":  "Firefox",
+                       "Target":  "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+                   },
+                   {
+                       "Name":  "Obsidian",
+                       "Target":  "D:\\obsidian\\Obsidian.exe"
+                   },
+                   {
+                       "Name":  "VS Code",
+                       "Target":  "D:\\Microsoft VS Code\\Code.exe"
+                   },
+                   {
+                       "Name":  "PyCharm",
+                       "Target":  "D:\\pycharm\\PyCharm 2026.1\\bin\\pycharm64.exe"
+                   },
+                   {
+                       "Name":  "网易云音乐",
+                       "Target":  "D:\\CloudMusic\\cloudmusic.exe"
+                   },
+                   {
+                       "Name":  "哔哩哔哩",
+                       "Target":  "D:\\bilibili\\哔哩哔哩.exe"
+                   },
+                   {
+                       "Name":  "Steam",
+                       "Target":  "D:\\STEAM\\Steam.exe"
+                   },
+                   {
+                       "Name":  "夸克网盘",
+                       "Target":  "D:\\Quark\\quark.exe"
+                   },
+                   {
+                       "Name":  "企业微信",
+                       "Target":  "D:\\WXWork\\WXWork.exe"
+                   },
+                   {
+                       "Name":  "Telegram Desktop",
+                       "Target":  "D:\\Telegram Desktop\\Telegram.exe"
+                   }
+               ],
+    "folders":  [
+                    {
+                        "Name":  "下载",
+                        "Target":  "%USERPROFILE%\\Downloads"
+                    }
+                ]
+}
