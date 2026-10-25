@@ -70,11 +70,13 @@ internal sealed class MenuBarWindow : Window
         new WindowInteropHelper(this).Owner = _glass.Handle;
 
         _logo = Clickable(WindowsLogo(), 9);
-        _logo.MouseLeftButtonDown += (_, _) => _startOpenAtPress = StartMenu.IsOpen(GetForegroundWindow());
+        // 左键 = 启动台（我们自己的）。不再拉 Windows 开始菜单：碰它一次，SearchHost /
+        // StartMenuExperienceHost / TextInputHost 就会常驻（合计约 430MB）。
+        // 需要原生开始菜单：Shift + 左键；右键仍是 Win+X 快捷菜单。
         _logo.MouseLeftButtonUp += (_, _) =>
         {
-            // Start may already have closed itself on the press; toggling then would reopen it.
-            if (!_startOpenAtPress || StartMenu.IsOpen(GetForegroundWindow())) StartMenu.Toggle();
+            if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0) StartMenu.Toggle();
+            else LaunchpadWindow.Open();
         };
         _logo.MouseRightButtonUp += (_, _) => StartMenu.ShowQuickLinkMenu();
 

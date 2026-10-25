@@ -2050,6 +2050,21 @@ internal sealed class DockWindow : Window
         var className = GetClassName(foreground);
         // 桌面、任务栏本身不算；我们自己的窗口（菜单栏、启动台）也不算。
         if (className is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return false;
+
+        // Alt+Tab 的任务视图/切换器也是全屏窗口，但不是"应用全屏"：
+        // 以前把它当全屏，于是按 Alt+Tab 时 Dock 和菜单栏一起消失。
+        if (className is "MultitaskingViewFrame" or "TaskSwitcherWnd" or "TaskListThumbnailWnd"
+            or "XamlExplorerHostIslandWindow" or "ForegroundStaging" or "Windows.UI.Core.CoreWindow") return false;
+
+        // 同理：系统 shell 进程的窗口（开始菜单、搜索、任务视图宿主）一律不算全屏。
+        try
+        {
+            GetWindowThreadProcessId(foreground, out uint shellPid);
+            string shellProcess = System.Diagnostics.Process.GetProcessById((int)shellPid).ProcessName;
+            if (shellProcess is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
+                or "SearchHost" or "SearchApp" or "ShellHost" or "LockApp" or "TextInputHost") return false;
+        }
+        catch (Exception) { }
         GetWindowThreadProcessId(foreground, out uint pid);
         if (pid == Environment.ProcessId) return false;
 
