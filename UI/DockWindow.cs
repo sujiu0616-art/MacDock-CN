@@ -2025,6 +2025,7 @@ internal sealed class DockWindow : Window
     /// 由 Explorer 的 ABN_FULLSCREENAPP 或我们自己的检测（见 <see cref="DetectFullscreenApp"/>）驱动 ——
     /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
     DateTime _fullscreenWantedSince = DateTime.MinValue;
+    const double FullscreenDebounceSeconds = 3.0;   // 只有"持续 3 秒"的全屏才算数（开机时有 2~3 秒的临时全屏窗口）
 
     /// <summary>
     /// 收起 / 放回 Dock 与菜单栏。
@@ -2038,12 +2039,12 @@ internal sealed class DockWindow : Window
         if (fullscreen && _fullscreen != fullscreen)
         {
             if (_fullscreenWantedSince == DateTime.MinValue) _fullscreenWantedSince = DateTime.UtcNow;
-            if ((DateTime.UtcNow - _fullscreenWantedSince).TotalSeconds < 1.5) return;
+            if ((DateTime.UtcNow - _fullscreenWantedSince).TotalSeconds < FullscreenDebounceSeconds) return;
         }
         if (!fullscreen) _fullscreenWantedSince = DateTime.MinValue;
 
         if (_fullscreen == fullscreen) return;
-        Log.Info($"Fullscreen: {fullscreen}");
+        Log.Info(fullscreen ? $"Fullscreen: True <- {DescribeForeground()}" : "Fullscreen: False");
         _fullscreen = fullscreen;
         _menuBars?.SetFullscreen(fullscreen);
 
@@ -2077,6 +2078,25 @@ internal sealed class DockWindow : Window
     {
         var placement = new Placement { length = System.Runtime.InteropServices.Marshal.SizeOf<Placement>() };
         return GetWindowPlacement(hwnd, ref placement) && placement.showCmd == 3;
+    }
+    /// <summary>描述当前前台窗口（进程/类名/标题/尺寸），用于排查"谁让我们收起了 Dock"。</summary>
+    static string DescribeForeground()
+    {
+        try
+        {
+            var foreground = GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return "none";
+            string className = GetClassName(foreground);
+            GetWindowThreadProcessId(foreground, out uint pid);
+            string process = "?";
+            try { process = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch (Exception) { }
+            var titleBuffer = new System.Text.StringBuilder(256);
+            _ = GetWindowText(foreground, titleBuffer, titleBuffer.Capacity);
+            string title = titleBuffer.ToString();
+            GetWindowRect(foreground, out var rect);
+            return $"{process} class={className} rect=({rect.Left},{rect.Top}) {rect.Width}x{rect.Height} title='{title}'";
+        }
+        catch (Exception) { return "unavailable"; }
     }
     bool DetectFullscreenApp()
     {
