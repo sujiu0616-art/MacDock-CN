@@ -94,6 +94,9 @@ internal static class TaskbarState
                 Log.Info($"Taskbar hidden (original state {original})");
             }
             if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
+            // 同时写进注册表：这样开机时 Explorer 一启动就是"自动隐藏"状态，
+            // Windows 任务栏根本不会先露出来再被我们藏掉（原来只改运行时状态，重启后它又会亮一下）。
+            PersistAutoHide(true);
         }
         HideWindows(tray);
         return true;
