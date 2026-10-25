@@ -31,8 +31,9 @@ internal sealed class LaunchpadWindow : Window
     const double SearchWidth = 380;
     const double SearchHeight = 38;
 
-    const int EntranceMs = 160;   // 进入：0.9 → 1.0 的缩放 + 淡入，mac 在 120~180ms 之间
-    const int ExitMs = 130;
+    // 只做淡入淡出：缩放整屏可视树会每帧重新栅格化（2560×1600），这是之前"不丝滑"的根因
+    const int EntranceMs = 0;     // 0 = 不做动画，直接出现（用户要求"不要动画"）
+    const int ExitMs = 0;         // 0 = 直接消失
 
 
     static readonly FontFamily Font = Typo.Ui;
@@ -74,7 +75,7 @@ internal sealed class LaunchpadWindow : Window
     readonly Border _searchBox;
     readonly TextBlock _placeholder;
     readonly TextBlock _message;
-    readonly ScaleTransform _entrance = new(0.9, 0.9);
+    readonly ScaleTransform _entrance = new(1, 1);   // 保持 1：不做整屏缩放动画
     readonly CancellationTokenSource _cancel = new();
     readonly List<TileView> _tiles = [];
     readonly Brush _text, _subtle, _tileHover, _tileSelected, _tileOutline, _bubble, _bubbleText, _dotOn, _dotOff;
@@ -364,23 +365,36 @@ internal sealed class LaunchpadWindow : Window
 
     void CloseNow() => base.Close();
 
+    static readonly CubicEase SmoothIn = new() { EasingMode = EasingMode.EaseOut };
+    static readonly CubicEase SmoothOut = new() { EasingMode = EasingMode.EaseIn };
+
     void AnimateIn()
     {
-        _root.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(EntranceMs)));
-        var ease = new QuadraticEase { EasingMode = EasingMode.EaseOut };
-        _entrance.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(EntranceMs)) { EasingFunction = ease });
-        _entrance.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(EntranceMs)) { EasingFunction = ease });
+        if (EntranceMs <= 0)
+        {
+            // 不做动画：直接把两层置为不透明（避免"先半透明再跳一下"的闪动）
+            _root.BeginAnimation(OpacityProperty, null);
+            _root.Opacity = 1;
+            _glass.SetOpacity(1);
+            return;
+        }
+        _root.Opacity = 0;
+        _root.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(EntranceMs)) { EasingFunction = SmoothIn });
+        _glass.Fade(0, 1, EntranceMs, SmoothIn);
     }
 
     void AnimateOut()
     {
-        var ease = new QuadraticEase { EasingMode = EasingMode.EaseIn };
-        var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(ExitMs)) { EasingFunction = ease };
+        if (ExitMs <= 0)
+        {
+            CloseNow();
+            return;
+        }
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(ExitMs)) { EasingFunction = SmoothOut };
         fade.Completed += (_, _) => CloseNow();
         _root.BeginAnimation(OpacityProperty, fade);
-        _entrance.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(0.94, TimeSpan.FromMilliseconds(ExitMs)) { EasingFunction = ease });
-        _entrance.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(0.94, TimeSpan.FromMilliseconds(ExitMs)) { EasingFunction = ease });
-        _glass.Fade(1, 0, ExitMs);
+        _glass.Fade(1, 0, ExitMs, SmoothOut);
     }
 
     void FocusSearch()
@@ -821,11 +835,21 @@ internal sealed class LaunchpadGlass : AcrylicWindow   // 只用它的分层窗�
     public void FadeIn(int ms) => Fade(0, 1, ms);
 
     /// <summary>Fades the whole glass, wallpaper layer included: cross-fading only the tint would flash.</summary>
-    public void Fade(double from, double to, int ms)
+    public void Fade(double from, double to, int ms) => Fade(from, to, ms, new QuadraticEase { EasingMode = EasingMode.EaseOut });
+
+    /// <summary>带缓动的淡入淡出（内容窗口用同一组参数，两层完全同步）。</summary>
+    /// <summary>不做动画，直接把不透明度设成某个值。</summary>
+    public void SetOpacity(double value)
+    {
+        _layers.BeginAnimation(OpacityProperty, null);
+        _layers.Opacity = value;
+    }
+
+    public void Fade(double from, double to, int ms, System.Windows.Media.Animation.IEasingFunction ease)
     {
         _layers.BeginAnimation(OpacityProperty, new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(ms))
         {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+            EasingFunction = ease,
         });
     }
 
