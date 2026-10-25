@@ -98,8 +98,8 @@ internal sealed class TaskbarReplacer : IDisposable
 
     void Apply()
     {
-        // 兼容模式（方案 A）：不隐藏任务栏窗口，只把它设成自动隐藏。
-        TaskbarState.AutoHideOnly();
+        // 强制隐藏任务栏窗口（用户要求：兼容问题跟任务栏无关，回到最干净的观感）。
+        TaskbarState.Hide();
     }
 
     void Release()

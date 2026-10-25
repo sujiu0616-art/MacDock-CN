@@ -93,10 +93,11 @@ internal static class TaskbarState
                 AutoStart.SetRestoreFallback(true);
                 Log.Info($"Taskbar hidden (original state {original})");
             }
-            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
-            // 同时写进注册表：这样开机时 Explorer 一启动就是"自动隐藏"状态，
-            // Windows 任务栏根本不会先露出来再被我们藏掉（原来只改运行时状态，重启后它又会亮一下）。
-            PersistAutoHide(true);
+            // 强制隐藏：先把"自动隐藏"关掉 —— 否则 Explorer 会接管这条窗口（重新 Show 出来做滑入滑出），
+            // 我们刚 SW_HIDE 掉它又会自己回来。关掉之后再硬隐藏，窗口就稳定处于隐藏状态。
+            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
+            // 强隐藏模式下注册表也写"不自动隐藏"：否则下次开机 Explorer 会先按自动隐藏把它摆出来一瞬。
+            PersistAutoHide(false);
         }
         HideWindows(tray);
         return true;
@@ -122,10 +123,12 @@ internal static class TaskbarState
                 AutoStart.SetRestoreFallback(true);
                 Log.Info($"Taskbar auto-hide (original state {original})");
             }
-            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
-            PersistAutoHide(true);
+            // 强制隐藏：先把"自动隐藏"关掉 —— 否则 Explorer 会接管这条窗口（重新 Show 出来做滑入滑出），
+            // 我们刚 SW_HIDE 掉它又会自己回来。关掉之后再硬隐藏，窗口就稳定处于隐藏状态。
+            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
+            PersistAutoHide(false);
         }
-        // 关键区别：这里不调用 HideWindows()，任务栏窗口保持可见（由系统自己藏）
+        HideWindows(tray);
         return true;
     }
 
@@ -356,9 +359,12 @@ internal static class TaskbarState
             {
                 GetWindowThreadProcessId(hwnd, out uint pid);
                 if (pid == Environment.ProcessId) continue;       // the menu bar's tray service
-                if (explorer != 0 && pid == explorer) result.Add(hwnd);
+                // 不再要求"必须是 explorer 的 pid"：Explorer 重启后 pid 会变，旧判断会漏掉新窗口，
+                // 结果就是"日志说已隐藏、任务栏其实还在屏幕上"。除了我们自己的，一律算目标。
+                result.Add(hwnd);
             }
         }
+
         return result;
     }
 
