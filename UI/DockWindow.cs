@@ -107,10 +107,10 @@ internal sealed class DockWindow : Window
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
     /// <summary>常驻的全屏检测：Explorer 的 ABN_FULLSCREENAPP 在任务栏被隐藏后不可靠，自己每 500ms 看一眼。</summary>
-    int _stripSweepTick;   // 每 4 次心跳（2 秒）做一次兜底扫描
+    DateTime _lastStripSweep = DateTime.MinValue;   // 全盘扫描（StripGuard）上次执行时间
 
     ForegroundWatcher? _foregroundWatcher;   // 前台/尺寸变化即时触发全屏检测
-    readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(500) };
+    readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(120) };   // 120ms：全屏入场要"跟手"，500ms 会明显慢半拍
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
@@ -240,7 +240,12 @@ internal sealed class DockWindow : Window
         _fullscreenCheck.Tick += (_, _) =>
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
-            if (++_stripSweepTick % 4 == 0) StripGuard.Sweep();
+            // 心跳现在是 120ms，全盘扫描仍保持 ~2 秒一次（按时间判断，不按 tick 计数）
+            if ((DateTime.UtcNow - _lastStripSweep).TotalSeconds >= 2)
+            {
+                _lastStripSweep = DateTime.UtcNow;
+                StripGuard.Sweep();
+            }
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
@@ -2224,7 +2229,7 @@ internal sealed class DockWindow : Window
     // 但误判的真因（最大化窗口 / 铺满工作区 / 直接采信 ABN_FULLSCREENAPP）都已各自修好，
     // 3s 只会让播放器全屏时 Dock 迟迟不收起（实测用户直接感知为"消失得很慢"）。
     // 现在 0.25s：既不会误收，又基本无感。
-    const double FullscreenDebounceSeconds = 0.10;
+    const double FullscreenDebounceSeconds = 0.05;
 
     /// <summary>
     /// 收起 / 放回 Dock 与菜单栏。
