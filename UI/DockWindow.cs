@@ -238,8 +238,6 @@ internal sealed class DockWindow : Window
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
             if (++_stripSweepTick % 4 == 0) StripGuard.Sweep();
-            // 没有菜单开着却还挂着低级鼠标钩子 → 卸掉（否则全系统鼠标都要等我们的 UI 线程）
-            MouseHook.DropIfIdle();
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();

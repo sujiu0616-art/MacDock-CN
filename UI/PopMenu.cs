@@ -55,7 +55,7 @@ internal sealed class PopMenu : IDisposable
     internal static void CloseAllOpen()
     {
         foreach (var menu in Open.ToList()) menu.CloseAll();
-        if (Open.Count == 0) MouseHook.Drop();
+        if (Open.Count == 0) MenuWatchdog.StopIfIdle();
     }
     bool _leavingToChild;
 
@@ -276,7 +276,7 @@ internal sealed class PopMenu : IDisposable
         _window.BeginAnimation(UIElement.OpacityProperty,
             new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(90)));
         if (!Open.Contains(this)) Open.Add(this);
-        MouseHook.Ensure();
+        MenuWatchdog.Start();
         _watch.Start();
     }
 
@@ -293,7 +293,7 @@ internal sealed class PopMenu : IDisposable
         // 先记账再判断可见性：窗口已经不可见时也要把菜单从 Open 里摘掉，
         // 否则低级鼠标钩子会一直挂着（全系统鼠标输入都要等我们的 UI 线程 → 别的软件像卡死）。
         bool wasOpen = Open.Remove(this);
-        if (Open.Count == 0) MouseHook.Drop();
+        if (Open.Count == 0) MenuWatchdog.StopIfIdle();
         if (!_window.IsVisible) return;
         _watch.Stop();
         _window.Hide();
@@ -362,102 +362,78 @@ internal static class WindowExtensions
 /// 低级鼠标钩子：用来实现"点菜单外面就关闭"。
 /// 轮询 GetAsyncKeyState 判断按下不可靠（会把刚弹出的菜单自己关掉，或干脆不关），这里改用系统钩子。
 /// </summary>
-internal static class MouseHook
+/// <summary>
+/// 菜单开着时的"点外面就关"观察器：只用 GetAsyncKeyState **读**按键状态，不挂钩子，
+/// 不参与系统输入链（原来的 WH_MOUSE_LL 会把全系统鼠标输入串到我们的 UI 线程上）。
+/// 没菜单时定时器停掉，零开销。
+/// </summary>
+internal static class MenuWatchdog
 {
-    const int WH_MOUSE_LL = 14;
-    const int WM_LBUTTONDOWN = 0x0201, WM_RBUTTONDOWN = 0x0204, WM_MBUTTONDOWN = 0x0207;
+    const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, VK_MBUTTON = 0x04;
 
-    [StructLayout(LayoutKind.Sequential)]
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern short GetAsyncKeyState(int key);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool GetCursorPos(out POINT point);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     struct POINT { public int X, Y; }
 
-    [StructLayout(LayoutKind.Sequential)]
-    struct MSLLHOOKSTRUCT
-    {
-        public POINT pt;
-        public uint mouseData;
-        public uint flags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-
-    delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint threadId);
-    [DllImport("user32.dll")]
-    static extern bool UnhookWindowsHookEx(IntPtr hook);
-    [DllImport("user32.dll")]
-    static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll")]
-    static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    static extern IntPtr GetModuleHandle(string? name);
-
-    [StructLayout(LayoutKind.Sequential)]
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     struct RECT { public int L, T, R, B; }
 
-    static IntPtr _hook;
-    static HookProc? _proc;   // 必须保住委托，否则会被 GC 回收导致钩子失效
+    static System.Windows.Threading.DispatcherTimer? _timer;
+    static bool _wasDown;
 
-    public static void Ensure()
+    public static void Start()
     {
-        if (_hook != IntPtr.Zero) return;
-        _proc ??= Callback;
-        _hook = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(null), 0);
-        if (_hook == IntPtr.Zero) Log.Info("PopMenu: the mouse hook was refused; Esc still closes the menu");
+        if (_timer is not null) return;
+        _timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+        _timer.Tick += (_, _) => Tick();
+        _timer.Start();
     }
 
-    /// <summary>没有任何菜单开着却还挂着钩子时，强制卸掉（定时器每秒调一次，开销可忽略）。</summary>
-    public static void DropIfIdle()
+    public static void StopIfIdle()
     {
-        if (_hook != IntPtr.Zero && PopMenu.OpenMenus.Count == 0)
-        {
-            UnhookWindowsHookEx(_hook);
-            _hook = IntPtr.Zero;
-            Log.Info("PopMenu: dropped a stale mouse hook");
-        }
+        if (_timer is null || PopMenu.OpenMenus.Count > 0) return;
+        _timer.Stop();
+        _timer = null;
     }
 
-    public static void Drop()
-    {
-        if (_hook == IntPtr.Zero) return;
-        UnhookWindowsHookEx(_hook);
-        _hook = IntPtr.Zero;
-    }
-
-    static IntPtr Callback(int code, IntPtr wParam, IntPtr lParam)
+    static void Tick()
     {
         try
         {
-            if (code >= 0)
-            {
-                int message = (int)wParam;
-                if (message is WM_LBUTTONDOWN or WM_RBUTTONDOWN or WM_MBUTTONDOWN)
-                {
-                    var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-                    if (!OverAnyMenu(info.pt))
-                    {
-                        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-                        if (dispatcher is not null) dispatcher.BeginInvoke(new Action(PopMenu.CloseAllOpen));
-                    }
-                }
-            }
+            if (PopMenu.OpenMenus.Count == 0) { StopIfIdle(); return; }
+
+            bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+                        || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0
+                        || (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
+            // 只在"按下"的那一刻判断一次，按住不放不会反复触发
+            if (down && !_wasDown && !OverAnyMenu())
+                PopMenu.CloseAllOpen();
+            _wasDown = down;
         }
         catch (Exception)
         {
-            // 钩子回调里绝不能抛
+            // 定时器里不许抛
         }
-        return CallNextHookEx(_hook, code, wParam, lParam);
     }
 
-    static bool OverAnyMenu(POINT p)
+    static bool OverAnyMenu()
     {
+        if (!GetCursorPos(out var p)) return false;
         foreach (var menu in PopMenu.OpenMenus)
         {
             var hwnd = menu.WindowHandle;
             if (hwnd == IntPtr.Zero) continue;
             if (!GetWindowRect(hwnd, out var r)) continue;
-            if (p.X >= r.L && p.X <= r.R && p.Y >= r.T && p.Y <= r.B) return true;
+            if (p.X >= r.L && p.X < r.R && p.Y >= r.T && p.Y < r.B) return true;
         }
         return false;
     }
