@@ -108,6 +108,8 @@ internal sealed class DockWindow : Window
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
     /// <summary>常驻的全屏检测：Explorer 的 ABN_FULLSCREENAPP 在任务栏被隐藏后不可靠，自己每 500ms 看一眼。</summary>
     int _stripSweepTick;   // 每 4 次心跳（2 秒）做一次兜底扫描
+
+    ForegroundWatcher? _foregroundWatcher;   // 前台/尺寸变化即时触发全屏检测
     readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
@@ -237,6 +239,14 @@ internal sealed class DockWindow : Window
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
+
+        // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
+        _foregroundWatcher = new ForegroundWatcher(() =>
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
+            }), System.Windows.Threading.DispatcherPriority.Input));
+        _foregroundWatcher.Start();
         UpdateStripGuard();
         StripGuard.RepairWronglyHidden();
         Dispatcher.BeginInvoke(new Action(StripGuard.Sweep), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -406,6 +416,8 @@ internal sealed class DockWindow : Window
         _appBar = null;
         KeyLauncher.Uninstall();
         _followTimer.Stop();
+        _foregroundWatcher?.Dispose();
+        _foregroundWatcher = null;
         StripGuard.Uninstall();
         _fullscreenCheck.Stop();
         _trashTimer?.Stop();
@@ -2075,11 +2087,44 @@ internal sealed class DockWindow : Window
     /// <summary>Like the Dock, step aside while a full-screen app (video, game, presentation) is in front.</summary>
     void OnFullscreenApp(bool fullscreen)
     {
-        // Explorer 的 ABN_FULLSCREENAPP 只代表"有窗口盖住了 app bar 那条"，不等于应用全屏
-        // （联想电脑管家的开机弹窗、TopMost 的 H5 弹窗都会触发）。这里改用我们自己的判定：
-        // 只有真正盖住整块屏的窗口才算全屏。
-        if (fullscreen && !DetectFullscreenApp()) return;
-        SetFullscreen(fullscreen);
+        if (!fullscreen) { SetFullscreen(false); return; }
+
+        // 快速通道：Explorer 说"有窗口盖住了 app bar"。它由别的窗口压到我们地盘触发，
+        // 比"整块屏判定"早（播放器的全屏动画刚起步就能命中）。前提是它确实盖满了工作区。
+        if (CoversWorkArea(GetForegroundWindow())) { SetFullscreen(true, immediate: true); return; }
+
+        // 慢路径：不采信通知，只信我们自己的整屏判定
+        if (DetectFullscreenApp()) SetFullscreen(true);
+    }
+
+    /// <summary>前台窗口是否盖满了工作区（= 已经压住我们的 appbar 那条）。用于 ABN 快速通道。</summary>
+    bool CoversWorkArea(IntPtr foreground)
+    {
+        if (foreground == IntPtr.Zero) return false;
+        if (IsIconic(foreground)) return false;
+        var className = GetClassName(foreground);
+        if (className is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return false;
+        if (className is "MultitaskingViewFrame" or "TaskSwitcherWnd" or "TaskListThumbnailWnd"
+            or "XamlExplorerHostIslandWindow" or "ForegroundStaging" or "Windows.UI.Core.CoreWindow") return false;
+
+        GetWindowThreadProcessId(foreground, out uint pid);
+        if (pid == Environment.ProcessId) return false;
+        try
+        {
+            string owner = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+            if (OemNoise.Contains(owner)) return false;
+            if (owner is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
+                or "SearchHost" or "SearchApp" or "ShellHost" or "LockApp" or "TextInputHost") return false;
+        }
+        catch (Exception) { }
+
+        if (IsMaximized(foreground)) return false;   // 最大化窗口不是全屏
+        if (!GetWindowRect(foreground, out var rect)) return false;
+
+        var work = CurrentDisplay().Work;
+        const int slack = 8;
+        return rect.Left <= work.Left + slack && rect.Top <= work.Top + slack
+               && rect.Right >= work.Right - slack && rect.Bottom >= work.Bottom - slack;
     }
 
     /// <summary>
@@ -2099,7 +2144,7 @@ internal sealed class DockWindow : Window
     // 但误判的真因（最大化窗口 / 铺满工作区 / 直接采信 ABN_FULLSCREENAPP）都已各自修好，
     // 3s 只会让播放器全屏时 Dock 迟迟不收起（实测用户直接感知为"消失得很慢"）。
     // 现在 0.25s：既不会误收，又基本无感。
-    const double FullscreenDebounceSeconds = 0.25;
+    const double FullscreenDebounceSeconds = 0.10;
 
     /// <summary>
     /// 收起 / 放回 Dock 与菜单栏。
@@ -2108,17 +2153,20 @@ internal sealed class DockWindow : Window
     /// </summary>
     /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
     /// </summary>
-    void SetFullscreen(bool fullscreen)
+    void SetFullscreen(bool fullscreen, bool immediate = false)
     {
-        if (fullscreen && _fullscreen != fullscreen)
+        if (fullscreen && _fullscreen != fullscreen && !immediate)
         {
             if (_fullscreenWantedSince == DateTime.MinValue) _fullscreenWantedSince = DateTime.UtcNow;
             if ((DateTime.UtcNow - _fullscreenWantedSince).TotalSeconds < FullscreenDebounceSeconds) return;
         }
         if (!fullscreen) _fullscreenWantedSince = DateTime.MinValue;
+        else if (_fullscreenWantedSince == DateTime.MinValue) _fullscreenWantedSince = DateTime.UtcNow;
 
         if (_fullscreen == fullscreen) return;
-        Log.Info(fullscreen ? $"Fullscreen: True <- {DescribeForeground()}" : "Fullscreen: False");
+        Log.Info(fullscreen
+            ? $"Fullscreen: True (waited {(DateTime.UtcNow - _fullscreenWantedSince).TotalMilliseconds:0}ms{(immediate ? ", fast path" : "")}) <- {DescribeForeground()}"
+            : "Fullscreen: False");
         _fullscreen = fullscreen;
         _menuBars?.SetFullscreen(fullscreen);
 
