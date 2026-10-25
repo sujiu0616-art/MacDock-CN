@@ -11,6 +11,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet9"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = "1"
 $env:DOTNET_NOLOGO = "1"
+# 不留常驻的编译服务器/节点：VBCSCompiler 一旦被拉起会占 130~260MB 且不会自己退出
+$env:MSBUILDDISABLENODEREUSE = "1"
+$env:UseSharedCompilation = "false"
 $dotnet = "$env:USERPROFILE\.dotnet9\dotnet.exe"
 $out = Join-Path $root "dist\MacDock"
 
@@ -20,7 +23,7 @@ if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 
 Push-Location (Join-Path $root "app")
 try {
-    & $dotnet publish MacDock.csproj -c $Configuration --self-contained false -o $out -v m 2>&1 | Select-Object -Last 8
+    & $dotnet publish -p:UseSharedCompilation=false MacDock.csproj -c $Configuration --self-contained false -o $out -v m 2>&1 | Select-Object -Last 8
     if ($LASTEXITCODE -ne 0) { throw "publish failed" }
 } finally { Pop-Location }
 

@@ -7,6 +7,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet9"
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = "1"
 $env:DOTNET_NOLOGO = "1"
+# 不留常驻的编译服务器/节点：VBCSCompiler 一旦被拉起会占 130~260MB 且不会自己退出
+$env:MSBUILDDISABLENODEREUSE = "1"
+$env:UseSharedCompilation = "false"
 $dotnet = "$env:USERPROFILE\.dotnet9\dotnet.exe"
 
 $mutex = New-Object System.Threading.Mutex($false, "Global\MacDockBuild")
