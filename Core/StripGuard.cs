@@ -91,9 +91,14 @@ internal static class StripGuard
             if (!GetWindowRect(hwnd, out var rect)) return false;
             if (rect.Width <= 0 || rect.Height <= 0) return false;
 
-            // 必须完全落在我们的条里（半像素允许），否则不碰
-            if (rect.Left < _strip.Left - 2 || rect.Right > _strip.Right + 2) return false;
-            if (rect.Top < _strip.Top - 2 || rect.Bottom > _strip.Bottom + 2) return false;
+            // 只处理"小窗压在菜单栏条上"这一种情况：
+            // · 尺寸小（<= 400x120）—— 最大化窗口、正常应用窗口一律不动
+            // · 顶边与条相交
+            // 实测火狐那个窗口尺寸会变（135x37 与 202x56 都出现过），不能要求"完全落在条里"。
+            if (rect.Width > 400 || rect.Height > 120) return false;
+            if (rect.Top > _strip.Bottom) return false;
+            if (rect.Bottom < _strip.Top) return false;
+            if (rect.Right < _strip.Left || rect.Left > _strip.Right) return false;
 
             GetWindowThreadProcessId(hwnd, out uint pid);
             if (pid == Environment.ProcessId) return false;
