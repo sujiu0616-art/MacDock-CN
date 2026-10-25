@@ -333,6 +333,17 @@ internal sealed class MenuBarWindow : Window
 
     // ───────────────────────── Content ─────────────────────────
 
+    /// <summary>开机时用：菜单栏淡入。</summary>
+    public void FadeIn(int ms)
+    {
+        _root.Opacity = 0;
+        _root.BeginAnimation(UIElement.OpacityProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(ms))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+            });
+    }
+
     public void ShowAppName(string name) => _appName.Text = name;
 
     /// <summary>

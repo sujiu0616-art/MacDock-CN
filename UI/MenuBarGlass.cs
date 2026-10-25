@@ -79,6 +79,17 @@ internal sealed class MenuBarGlass : Window
             : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
     }
 
+    /// <summary>开机时用：把整块玻璃从不透明到淡入（只在 --autostart 首帧调用一次）。</summary>
+    public void FadeIn(int ms)
+    {
+        _tint.Opacity = 0;
+        _tint.BeginAnimation(UIElement.OpacityProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(ms))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+            });
+    }
+
     public void SetVisible(bool visible)
     {
         if (Handle == IntPtr.Zero || visible == _visible) return;

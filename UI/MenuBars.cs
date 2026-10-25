@@ -93,6 +93,9 @@ internal sealed class MenuBars : IDisposable
     }
 
     /// <summary>全屏应用在前：菜单栏整条收起（macOS 也是这样）。</summary>
+    /// <summary>开机时用：所有菜单栏一起淡入。</summary>
+    public void FadeIn(int ms) => _bars.ForEach(b => b.FadeIn(ms));
+
     public void SetFullscreen(bool fullscreen) => _bars.ForEach(b => b.SetFullscreen(fullscreen));
 
     public void ApplyTheme() => _bars.ForEach(b => b.ApplyTheme());

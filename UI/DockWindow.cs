@@ -339,9 +339,33 @@ internal sealed class DockWindow : Window
         LaunchpadWindow.OpenChanged += OnLaunchpadOpenChanged;
     }
 
+    /// <summary>开机自启时的淡入时长（日常打开 Dock 不会有动画）。</summary>
+    const int StartupFadeMs = 500;
+
+    void FadeInAtStartup()
+    {
+        try
+        {
+            _canvas.Opacity = 0;
+            _canvas.BeginAnimation(UIElement.OpacityProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(StartupFadeMs))
+                {
+                    EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+                });
+            _backdrop.FadeIn(StartupFadeMs);
+            _menuBars?.FadeIn(StartupFadeMs);
+            Log.Info($"StartupFade: {StartupFadeMs}ms (dock, plate, menu bar)");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Fading the shell in at startup");
+        }
+    }
+
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
+        if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) FadeInAtStartup();
         Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms at={DateTime.Now:HH:mm:ss.fff} procStart={System.Diagnostics.Process.GetCurrentProcess().StartTime:HH:mm:ss.fff}");
         Place();
     }

@@ -17,6 +17,10 @@ internal static class Program
                 return Guard.RunSpawner(args);
             case Guard.WatchArg:
                 return Guard.RunGuard(args);
+            case "--hide-taskbar":
+                // 开机第一步：只把 Windows 任务栏藏起来（不加载 WPF、不建 Dock），几百毫秒就完成。
+                TaskbarState.Hide();
+                return 0;
             case "--restore-taskbar":
                 // Emergency switch: shows the Windows taskbar whatever state it was left in.
                 TaskbarState.Restore(force: true);
