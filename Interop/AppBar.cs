@@ -53,10 +53,15 @@ internal sealed class AppBar : IDisposable
     /// (0 = reserve nothing, used by auto-hide) and returns the rectangle the shell granted.
     /// The side of that rectangle facing the screen edge is where the dock sits.
     /// </summary>
-    public RECT SetPosition(DockEdge edge, RECT monitor, int thickness) => SetPosition(ToAbe(edge), monitor, thickness);
+    public RECT SetPosition(DockEdge edge, RECT monitor, int thickness, bool ownEdge = false)
+        => SetPosition(ToAbe(edge), monitor, thickness, ownEdge);
 
-    /// <summary>Same, with the shell's own edge constant (<c>ABE_TOP</c> for the menu bar).</summary>
-    public RECT SetPosition(uint abe, RECT monitor, int thickness)
+    /// <summary>
+    /// <paramref name="ownEdge"/> = 抢占这条屏幕边：跳过 ABM_QUERYPOS，直接按显示器边界要位置。
+    /// 原生任务栏被 SW_HIDE 之后**仍然注册着 appbar**，它的预留还在工作区里，
+    /// QUERYPOS 会把我们的矩形往上推正好一个任务栏高度（实测 Dock 悬空 72px = 用户报的"太高了"）。
+    /// </summary>
+    public RECT SetPosition(uint abe, RECT monitor, int thickness, bool ownEdge = false)
     {
         var data = NewData();
         data.uEdge = abe;
@@ -64,13 +69,21 @@ internal sealed class AppBar : IDisposable
         Shape(ref data.rc, abe, thickness);
         if (!_registered) return data.rc;
 
-        SHAppBarMessage(ABM_QUERYPOS, ref data);
-        Shape(ref data.rc, abe, thickness);
-
+        if (!ownEdge)
+        {
+            SHAppBarMessage(ABM_QUERYPOS, ref data);
+            Shape(ref data.rc, abe, thickness);
+        }
         // Skip SETPOS when nothing changed: it would ping every other app bar and could loop.
         if (data.uEdge == _lastEdge && data.rc.Equals(_lastRect)) return data.rc;
 
         SHAppBarMessage(ABM_SETPOS, ref data);
+        if (ownEdge)
+        {
+            // Explorer 仍会把我们的矩形从任务栏那段预留里"挤"出来（实测短 72px = 任务栏高度）。
+            // 既然是自己占这条边，就直接按显示器边界重新算，不采信它返回的坐标。
+            data.rc = monitor;
+        }
         Shape(ref data.rc, abe, thickness);
         _lastEdge = data.uEdge;
         _lastRect = data.rc;

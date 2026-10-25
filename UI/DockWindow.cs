@@ -553,7 +553,7 @@ internal sealed class DockWindow : Window
         // 落在同一像素上（视觉上就是"贴在一起/有点重叠"）。留 6 DIU 之后窗口与 Dock 之间有一条缝。
         const double DockGap = 6;
         int reserve = settings.AutoHide ? 0 : (int)Math.Ceiling((_m.EdgeGap + _m.PlateThickness + DockGap) * _scale);
-        var bar = _appBar.SetPosition(Edge, display.Bounds, reserve);
+        var bar = _appBar.SetPosition(Edge, display.Bounds, reserve, ownEdge: true);   // 自己占住屏幕底边
         var work = display.Work;
 
         _windowPx = Edge switch
