@@ -2,8 +2,8 @@
 
 ## 上游
 
-- **项目**：lupanostefano/MacDock（原名 Gravitone）
-- **地址**：<https://github.com/lupanostefano/MacDock>
+- **项目**：lupanostefano/Gravitone（Windows 上的 macOS 风格 Dock）
+- **地址**：<https://github.com/lupanostefano/Gravitone>
 - **授权**：MIT License
 - **版权**：Copyright (c) 2026 Stefano Lupano
 

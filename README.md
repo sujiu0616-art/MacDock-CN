@@ -1,7 +1,7 @@
 # MacDock-CN · macOS 风格任务栏（Windows 11 中文二创版）
 
 > **这是一个二创（derivative work）项目。**
-> 上游：[**lupanostefano/MacDock**](https://github.com/lupanostefano/MacDock)（MIT License，© 2026 Stefano Lupano）。
+> 上游：[**lupanostefano/Gravitone**](https://github.com/lupanostefano/Gravitone)（MIT License，© 2026 Stefano Lupano）。
 > 本项目在其基础上做了大量修改，**不是**上游官方版本，与上游作者无关；问题请提到本仓库，不要打扰上游。
 
 把 Windows 11 的任务栏换成一个 macOS Tahoe 风格的外壳：底部 Dock + 顶部菜单栏 + 启动台，
