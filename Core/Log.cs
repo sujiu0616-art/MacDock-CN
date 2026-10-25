@@ -7,7 +7,7 @@ internal static class Log
 
     public static void Info(string message) => Write($"INFO  {message}");
 
-    const long MaxBytes = 1024 * 1024;
+    const long MaxBytes = 512 * 1024;
     static readonly object Gate = new();
 
     static void Write(string line)
@@ -20,7 +20,14 @@ internal static class Log
                 var path = Path.Combine(DockConfig.Folder, "log.txt");
                 // The dock runs for weeks: keep the current log and the previous one, 1 MB each.
                 var info = new FileInfo(path);
-                if (info.Exists && info.Length > MaxBytes) File.Move(path, Path.Combine(DockConfig.Folder, "log.old.txt"), overwrite: true);
+                if (info.Exists && info.Length > MaxBytes)
+                {
+                    // 留两代：log.txt → log.1.txt → log.2.txt，各 512KB 上限
+                    var first = Path.Combine(DockConfig.Folder, "log.1.txt");
+                    var second = Path.Combine(DockConfig.Folder, "log.2.txt");
+                    if (File.Exists(first)) File.Move(first, second, overwrite: true);
+                    File.Move(path, first, overwrite: true);
+                }
                 File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {line}{Environment.NewLine}");
             }
         }

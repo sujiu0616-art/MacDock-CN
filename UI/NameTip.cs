@@ -94,7 +94,9 @@ internal sealed class NameTip : Window
         _generation++;
         var tip = _open;
         _open = null;
-        tip?.Hide();
+        // Close 而不是 Hide：Hide 掉的窗口对象和它的 HwndSource 会一直留着，
+        // 每次悬停都新建一个 → 进程里越积越多（实测出现过 2 个 "MacDock Tip" 窗口）。
+        try { tip?.Close(); } catch (Exception) { }
     }
 
     void Apply(string text, Rect anchor)
