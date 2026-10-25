@@ -258,6 +258,9 @@ internal static class LaunchpadModel
     /// <c>EnumerateFiles(AllDirectories)</c> 碰到一个就整体抛异常，会把后面所有快捷方式一起丢掉；
     /// 这里坏一个文件夹只记一条日志，接着走其余的。
     /// </summary>
+    /// <summary>已经记过日志的"拒绝访问"目录（系统目录，一次就够）。</summary>
+    static readonly HashSet<string> _deniedLogged = new(StringComparer.OrdinalIgnoreCase);
+
     static IEnumerable<string> Shortcuts(string root)
     {
         var pending = new Stack<string>();
@@ -268,8 +271,18 @@ internal static class LaunchpadModel
             string[] files, folders;
             try
             {
+                // Windows 在开始菜单里放了一批"旧式本地化"目录（如 "程序"），它们是 Hidden+System 的
+                // ReparsePoint，枚举一律被拒；跳过去既不丢应用（内容在 Programs 里），也省掉每次扫描的异常。
+                if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) continue;
+
                 files = Directory.GetFiles(folder, "*.lnk");
                 folders = Directory.GetDirectories(folder);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // 只记一次：这是系统目录的固定行为，不是故障
+                if (_deniedLogged.Add(folder)) Log.Info($"Start menu folder skipped (access denied): {folder}");
+                continue;
             }
             catch (Exception ex)
             {

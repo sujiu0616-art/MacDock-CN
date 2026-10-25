@@ -107,6 +107,7 @@ internal sealed class DockWindow : Window
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
     /// <summary>常驻的全屏检测：Explorer 的 ABN_FULLSCREENAPP 在任务栏被隐藏后不可靠，自己每 500ms 看一眼。</summary>
+    int _stripSweepTick;   // 每 4 次心跳（2 秒）做一次兜底扫描
     readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
@@ -231,13 +232,13 @@ internal sealed class DockWindow : Window
         };
         _fullscreenCheck.Tick += (_, _) =>
         {
-            // 顺手清掉压在菜单栏那条上的"别人的小窗"（Firefox 的 Battery Watcher：135×37 贴在 (0,0)，
-            // 会透过半透明菜单栏显示在应用名下面，看着像文字残影）
-            // 菜单栏 26 DIP；150% 缩放下约 39px，这里给到 60px 的余量，只清"完全在这一条里"的小窗
-            RogueWindows.Sweep(60);
+            // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
+            if (++_stripSweepTick % 4 == 0) StripGuard.Sweep();
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
+        UpdateStripGuard();
+        Dispatcher.BeginInvoke(new Action(StripGuard.Sweep), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         // 启动把图标都解完之后做一次紧凑 GC + trim
         Dispatcher.BeginInvoke(new Action(() => Core.Memory.Compact()),
             System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -404,6 +405,7 @@ internal sealed class DockWindow : Window
         _appBar = null;
         KeyLauncher.Uninstall();
         _followTimer.Stop();
+        StripGuard.Uninstall();
         _fullscreenCheck.Stop();
         _trashTimer?.Stop();
         _trashWatch?.Dispose();
@@ -1767,6 +1769,27 @@ internal sealed class DockWindow : Window
     {
         _displayCheck.Stop();
         _displayCheck.Start();
+    }
+
+    /// <summary>把"菜单栏这条"的屏幕矩形告诉 StripGuard：里面的别家窗口一律移走。</summary>
+    void UpdateStripGuard()
+    {
+        try
+        {
+            var display = CurrentDisplay();
+            int barPx = (int)Math.Ceiling(26 * display.Scale) + 2;
+            StripGuard.Update(new RECT
+            {
+                Left = display.Bounds.Left,
+                Top = display.Bounds.Top,
+                Right = display.Bounds.Right,
+                Bottom = display.Bounds.Top + barPx,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Updating the menu bar strip guard");
+        }
     }
 
     void CheckDisplays()
