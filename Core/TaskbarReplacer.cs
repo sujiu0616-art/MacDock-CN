@@ -98,10 +98,8 @@ internal sealed class TaskbarReplacer : IDisposable
 
     void Apply()
     {
-        TaskbarState.Hide();
-        Hook();
-        _enforceTimer.Start();
-        EnsureGuard();
+        // 兼容模式（方案 A）：不隐藏任务栏窗口，只把它设成自动隐藏。
+        TaskbarState.AutoHideOnly();
     }
 
     void Release()

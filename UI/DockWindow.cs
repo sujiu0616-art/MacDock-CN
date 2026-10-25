@@ -232,6 +232,8 @@ internal sealed class DockWindow : Window
             _displayCheck.Stop();
             CheckDisplays();
         };
+        // 兼容模式：原生任务栏被唤出时不和 Dock 抢位置 —— 先让开，它收回去再放回来。
+        _fullscreenCheck.Tick += (_, _) => SuppressForNativeTaskbar(NativeTaskbarShown());
         _fullscreenCheck.Tick += (_, _) =>
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
@@ -504,7 +506,7 @@ internal sealed class DockWindow : Window
     /// </summary>
     void EnsureShellVisible()
     {
-        if (_hwnd == IntPtr.Zero || _launchpadOpen) return;
+        if (_hwnd == IntPtr.Zero || _launchpadOpen || _suppressedByNativeTaskbar) return;
         try
         {
             bool hidden = !IsWindowVisible(_hwnd);
@@ -2087,6 +2089,44 @@ internal sealed class DockWindow : Window
     }
 
     /// <summary>Like the Dock, step aside while a full-screen app (video, game, presentation) is in front.</summary>
+    bool _suppressedByNativeTaskbar;
+
+    /// <summary>Explorer 的任务栏窗口当前是否可见（自动隐藏模式下被鼠标唤出来时会可见）。</summary>
+    /// <summary>
+    /// Explorer 的任务栏当前是否"露出来了"。
+    /// 注意：自动隐藏模式下它**一直是 WS_VISIBLE**，只是被挪到屏幕外 —— 不能只看 IsWindowVisible。
+    /// </summary>
+    bool NativeTaskbarShown()
+    {
+        var tray = TaskbarState.FindExplorerTray();
+        if (tray == IntPtr.Zero || !IsWindowVisible(tray)) return false;
+        if (!GetWindowRect(tray, out var rect)) return false;
+        var bounds = CurrentDisplay().Bounds;
+        return rect.Top < bounds.Bottom - 4;   // 滑到屏幕内 = 露出来了
+    }
+
+    /// <summary>原生任务栏露出来时把 Dock 与玻璃板让开，避免两条叠在一起。</summary>
+    void SuppressForNativeTaskbar(bool nativeShown)
+    {
+        if (nativeShown == _suppressedByNativeTaskbar) return;
+        _suppressedByNativeTaskbar = nativeShown;
+        if (_launchpadOpen) return;
+        if (nativeShown)
+        {
+            ShowWindow(_hwnd, SW_HIDE);
+            _backdrop.SetVisible(false);
+            Log.Info("Native taskbar shown: stepping aside");
+        }
+        else if (!_fullscreen)
+        {
+            ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            _backdrop.SetVisible(true);
+            UpdateFrame();
+            Log.Info("Native taskbar hidden: dock is back");
+        }
+    }
+
     void OnFullscreenApp(bool fullscreen)
     {
         if (!fullscreen) { SetFullscreen(false); return; }

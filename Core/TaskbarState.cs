@@ -102,6 +102,33 @@ internal static class TaskbarState
         return true;
     }
 
+    /// <summary>
+    /// 兼容模式：任务栏**窗口不隐藏**，只把它设成"自动隐藏"并写进注册表。
+    /// 这样 ITaskbarList3（进度/角标）、Toast、FindWindow("Shell_TrayWnd") 这些依赖真实任务栏的
+    /// 程序全部照常工作；平时它看不见，鼠标蹭到屏幕底边才滑出来。
+    /// </summary>
+    public static bool AutoHideOnly()
+    {
+        var tray = FindExplorerTray();
+        if (tray == IntPtr.Zero) return false;
+        using (Lock())
+        {
+            var marker = ReadMarker();
+            int pid = Environment.ProcessId;
+            if (marker is null || marker.OwnerPid != pid)
+            {
+                int original = marker?.OriginalState ?? GetState(tray);
+                WriteMarker(new Marker(original, pid));
+                AutoStart.SetRestoreFallback(true);
+                Log.Info($"Taskbar auto-hide (original state {original})");
+            }
+            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
+            PersistAutoHide(true);
+        }
+        // 关键区别：这里不调用 HideWindows()，任务栏窗口保持可见（由系统自己藏）
+        return true;
+    }
+
     /// <summary>Cheap re-check while hidden: hides any taskbar Windows has shown again.</summary>
     public static void Enforce()
     {
