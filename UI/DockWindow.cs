@@ -298,17 +298,18 @@ internal sealed class DockWindow : Window
         _displayLayout = Displays.Layout();
         Place();
 
-        // 这两件是启动里最慢的（托盘挂钩 ≈400ms、隐藏任务栏几十 ms），放到首帧渲染之后再跑：
-        // 用户先看到 Dock，再看到任务栏消失。顺序仍是"先挂托盘，再隐藏任务栏"（反了图标会丢）。
+        // 1) 先把 Windows 任务栏收掉：这一步只要几毫秒，而且用户最不想看到的就是"两个任务栏叠着"。
+        _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
+        _replacer.Start();
+        long afterTaskbar = StartupTiming.ElapsedMilliseconds;
+
+        // 2) 托盘挂钩是最慢的一环（冷启动实测 8.7s），放到首帧之后再跑：
+        //    期间 Dock 已经顶上去了，托盘图标晚几秒出现远比"双任务栏"好。
         Dispatcher.BeginInvoke(new Action(() =>
         {
             if (_config.Settings.MenuBar) ShowMenuBar();
             long afterMenuBar = StartupTiming.ElapsedMilliseconds;
-
-            _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
-            _replacer.Start();
-            long afterTaskbar = StartupTiming.ElapsedMilliseconds;
-            Log.Info($"StartupTiming: menuBar={afterMenuBar}ms taskbarHidden={afterTaskbar}ms deferred=yes");
+            Log.Info($"StartupTiming: menuBar={afterMenuBar}ms taskbarHiddenAt={afterTaskbar}ms at={DateTime.Now:HH:mm:ss.fff} deferred=yes");
         }), System.Windows.Threading.DispatcherPriority.Background);
 
 
@@ -340,7 +341,7 @@ internal sealed class DockWindow : Window
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
-        Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms");
+        Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms at={DateTime.Now:HH:mm:ss.fff} procStart={System.Diagnostics.Process.GetCurrentProcess().StartTime:HH:mm:ss.fff}");
         Place();
     }
 

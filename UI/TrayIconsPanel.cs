@@ -47,6 +47,20 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         _area.Initialize();
         if (_area.IsFailed) Log.Info("Notification area: failed to start");
         Sync();
+
+        // 开机时"隐藏 Explorer 任务栏"现在排在托盘挂钩之前，个别程序可能在我们建好托盘窗口前就把
+        // 图标注册给了正被隐藏的 Explorer：这里补一次广播，让它们重新注册到我们这里。
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            int count = _area.TrayIcons.Count;
+            Log.Info($"Notification area: {count} tray icon(s) after init");
+            if (count == 0)
+            {
+                uint message = RegisterWindowMessage("TaskbarCreated");
+                if (message != 0) BroadcastTaskbarCreated(message);
+                Log.Info("Notification area: broadcast TaskbarCreated again (no icons yet)");
+            }
+        }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     }
 
     /// <summary>Tells the tray where it lives, so apps place their menus and flyouts next to it.</summary>
@@ -211,4 +225,13 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         GetCursorPos(out var p);
         return (uint)(((p.Y & 0xFFFF) << 16) | (p.X & 0xFFFF));
     }
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    static extern bool SendNotifyMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    static extern uint RegisterWindowMessage(string name);
+
+    /// <summary>广播 TaskbarCreated：让所有托盘程序把图标重新注册到我们这里。</summary>
+    static void BroadcastTaskbarCreated(uint message) =>
+        SendNotifyMessage((IntPtr)0xFFFF, message, IntPtr.Zero, IntPtr.Zero);   // HWND_BROADCAST
 }
