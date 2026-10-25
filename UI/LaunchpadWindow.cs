@@ -25,6 +25,7 @@ internal sealed class LaunchpadWindow : Window
 {
     // 尺寸都是 DIU：150% 缩放下 1 DIU = 1.5 物理像素，所以 84 DIU 的图标 = 126 物理像素
     // macOS 的启动台在 1707 DIU 宽的屏上大约是 7 列 × 4 行铺满 80% 宽：格子 200、图标 120。
+    static readonly long _startedAt = Environment.TickCount64;   // 进程启动（类初始化）时刻，用于量"多久看到窗口"
     const double CellWidth = 200;
     const double CellHeight = 190;
     const double IconSize = 120;
@@ -397,6 +398,32 @@ internal sealed class LaunchpadWindow : Window
         _glass.Fade(1, 0, ExitMs, SmoothOut);
     }
 
+    /// <summary>后台重扫开始菜单：结果和缓存不同就替换并重绘；同时刷新缓存文件。</summary>
+    async Task RefreshFromScanAsync(CancellationToken token)
+    {
+        try
+        {
+            var scanned = await Task.Run(LaunchpadModel.Scan, token);
+            if (token.IsCancellationRequested || _closing) return;
+
+            bool changed = scanned.Count != _all.Count
+                           || scanned.Where((e, i) => i < _all.Count && (e.Name != _all[i].Name || e.Shortcut != _all[i].Shortcut)).Any();
+            if (changed)
+            {
+                Log.Info($"Launchpad: refreshed from scan ({_all.Count} -> {scanned.Count})");
+                _all = scanned;
+                ApplyFilter();
+                LoadIcons(token);
+            }
+            _ = Task.Run(() => LaunchpadModel.SaveCache(scanned), CancellationToken.None);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Refreshing the Launchpad from a fresh scan");
+        }
+    }
+
     void FocusSearch()
     {
         Activate();
@@ -410,6 +437,21 @@ internal sealed class LaunchpadWindow : Window
     async void Start()
     {
         var token = _cancel.Token;
+
+        // 先用上次的扫描结果把界面撑起来（几十毫秒），再在后台重新扫一遍。
+        var cached = LaunchpadModel.LoadCached();
+        if (cached is not null && !token.IsCancellationRequested)
+        {
+            Log.Info($"Launchpad: showing {cached.Count} cached apps");
+            _all = cached;
+            _scanning = false;
+            ApplyFilter();
+            ShowLaunchpad();
+            LoadIcons(token);
+            _ = RefreshFromScanAsync(token);
+            return;
+        }
+
         try
         {
             _all = await Task.Run(LaunchpadModel.Scan, token);
@@ -428,6 +470,8 @@ internal sealed class LaunchpadWindow : Window
         ApplyFilter();
         ShowLaunchpad();
         LoadIcons(token);
+        var scannedOnce = _all;
+        _ = Task.Run(() => LaunchpadModel.SaveCache(scannedOnce), CancellationToken.None);
     }
 
     /// <summary>玻璃先亮起来（DWM 亚克力在底下），内容窗口紧跟着带缩放进场。</summary>
@@ -445,6 +489,7 @@ internal sealed class LaunchpadWindow : Window
             _glass.SetBounds(rect);
             _glass.FadeIn(EntranceMs);
             Show();
+            Log.Info($"Launchpad: window shown at {Environment.TickCount64 - _startedAt}ms");
             // 窗口已经在屏上了，这里可以安全地晚一拍抓屏（也能避开 Dock 收起的过渡帧）。
             Dispatcher.BeginInvoke(new Action(() =>
             {

@@ -115,6 +115,53 @@ internal static class LaunchpadModel
         yield return Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
     }
 
+    // ── 扫描结果缓存 ─────────────────────────────────────────────────────
+    // 上次扫出来的 (Name, Shortcut) 存成 JSON；启动台先用它秒显，后台再核对一遍。
+    static string CachePath => System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MacDock", "launchpad-cache.json");
+
+    sealed record CachedEntry(string Name, string Shortcut);
+
+    /// <summary>读缓存（可能为 null）。几十毫秒级，可以直接在 UI 线程调用。</summary>
+    public static List<LaunchpadEntry>? LoadCached()
+    {
+        try
+        {
+            if (!System.IO.File.Exists(CachePath)) return null;
+            var rows = System.Text.Json.JsonSerializer.Deserialize<List<CachedEntry>>(System.IO.File.ReadAllText(CachePath));
+            if (rows is null || rows.Count == 0) return null;
+            var list = new List<LaunchpadEntry>(rows.Count);
+            foreach (var row in rows)
+            {
+                if (string.IsNullOrEmpty(row.Shortcut) || string.IsNullOrEmpty(row.Name)) continue;
+                if (!System.IO.File.Exists(row.Shortcut)) continue;   // 卸载掉的程序不留
+                list.Add(new LaunchpadEntry(row.Name, row.Shortcut));
+            }
+            return list.Count > 0 ? list : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reading the Launchpad cache");
+            return null;
+        }
+    }
+
+    /// <summary>把扫描结果写回缓存（后台线程调用）。</summary>
+    public static void SaveCache(IReadOnlyList<LaunchpadEntry> entries)
+    {
+        try
+        {
+            var rows = entries.Select(e => new CachedEntry(e.Name, e.Shortcut)).ToList();
+            var json = System.Text.Json.JsonSerializer.Serialize(rows);
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(CachePath)!);
+            System.IO.File.WriteAllText(CachePath, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Writing the Launchpad cache");
+        }
+    }
+
     public static List<LaunchpadEntry> Scan()
     {
         var byTarget = new Dictionary<string, LaunchpadEntry>(StringComparer.OrdinalIgnoreCase);
