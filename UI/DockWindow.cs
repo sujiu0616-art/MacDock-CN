@@ -2021,10 +2021,26 @@ internal sealed class DockWindow : Window
     /// 收起 / 放回 Dock 与菜单栏。macOS 在有全屏应用时也是把这两条都收起来。
     /// 由 Explorer 的 ABN_FULLSCREENAPP 或我们自己的检测（见 <see cref="DetectFullscreenApp"/>）驱动 ——
     /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
+    DateTime _fullscreenWantedSince = DateTime.MinValue;
+
+    /// <summary>
+    /// 收起 / 放回 Dock 与菜单栏。
+    /// 收起前要求"全屏"这个判断连续成立 1.5 秒（消抖）：开机时瞬间出现的临时全屏窗口、
+    /// Alt+Tab 的中间帧都不会再让 Dock 闪一下；放回则立即执行。
+    /// </summary>
+    /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
     /// </summary>
     void SetFullscreen(bool fullscreen)
     {
+        if (fullscreen && _fullscreen != fullscreen)
+        {
+            if (_fullscreenWantedSince == DateTime.MinValue) _fullscreenWantedSince = DateTime.UtcNow;
+            if ((DateTime.UtcNow - _fullscreenWantedSince).TotalSeconds < 1.5) return;
+        }
+        if (!fullscreen) _fullscreenWantedSince = DateTime.MinValue;
+
         if (_fullscreen == fullscreen) return;
+        Log.Info($"Fullscreen: {fullscreen}");
         _fullscreen = fullscreen;
         _menuBars?.SetFullscreen(fullscreen);
 
@@ -2042,6 +2058,23 @@ internal sealed class DockWindow : Window
     }
 
     /// <summary>前台窗口是否盖住了整块屏（含我们 app bar 那条）= 无边框全屏 / 全屏游戏。</summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct Placement
+    {
+        public int length, flags, showCmd;
+        public POINT ptMinPosition, ptMaxPosition;
+        public RECT rcNormalPosition;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool GetWindowPlacement(IntPtr hwnd, ref Placement placement);
+
+    /// <summary>窗口是否处于"最大化"状态（SW_SHOWMAXIMIZED = 3）。</summary>
+    static bool IsMaximized(IntPtr hwnd)
+    {
+        var placement = new Placement { length = System.Runtime.InteropServices.Marshal.SizeOf<Placement>() };
+        return GetWindowPlacement(hwnd, ref placement) && placement.showCmd == 3;
+    }
     bool DetectFullscreenApp()
     {
         var foreground = GetForegroundWindow();
@@ -2072,6 +2105,10 @@ internal sealed class DockWindow : Window
         var display = CurrentDisplay();
         var bounds = display.Bounds;
         const int tolerance = 2;
+
+        // 最大化的普通窗口即使铺满整屏也不算全屏应用：开机后某些程序以最大化状态恢复，
+        // 以前会被判定成"有全屏应用"而把 Dock 收起来（要等一次点击才回来）。
+        if (IsMaximized(foreground)) return false;
 
         // 情况一：盖住整块屏（含 appbar 那两条）= 无边框全屏 / 全屏游戏
         if (rect.Left <= bounds.Left + tolerance && rect.Top <= bounds.Top + tolerance

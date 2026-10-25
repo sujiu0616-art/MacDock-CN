@@ -35,6 +35,10 @@ internal sealed class MenuBarWindow : Window
     readonly TextBlock _wifi, _wifiBack, _volume, _battery;
     readonly Border _clock;
     readonly TextBlock _clockText;
+
+    TextBlock? _inputText;
+    Border? _inputCell;
+    readonly System.Windows.Threading.DispatcherTimer _inputTimer = new();
     readonly List<TextBlock> _texts = [];
     readonly List<Shape> _shapes = [];
 
@@ -117,9 +121,21 @@ internal sealed class MenuBarWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 0, 6, 0),
         };
+        // 输入法指示器：隐藏了 Windows 任务栏就看不到系统的"中/英"，这里补一格。
+        _inputText = Text("中", 12, FontWeights.Normal);
+        _inputText.VerticalAlignment = VerticalAlignment.Center;
+        _inputCell = Clickable(_inputText, 7);
+        InputIndicator.Attach(this, _inputCell);
+        right.Children.Add(_inputCell);
+
         if (_tray is not null) right.Children.Add(_tray);
         right.Children.Add(_status);
         right.Children.Add(_clock);
+
+        // 每 500ms 跟一次前台窗口的输入法状态（读一次 IME 转换模式，几乎零成本）
+        _inputTimer.Interval = TimeSpan.FromMilliseconds(500);
+        _inputTimer.Tick += (_, _) => UpdateInputLabel();
+        _inputTimer.Start();
 
         _root.Children.Add(left);
         _root.Children.Add(right);
@@ -324,6 +340,13 @@ internal sealed class MenuBarWindow : Window
     /// tooltip, but the layout of the string on screen belongs to the bar (localized, as on macOS),
     /// so the moment is formatted again here rather than parsed back out of the owner's text.
     /// </summary>
+    /// <summary>刷新"中/英"字样（跟随前台窗口的输入法状态）。</summary>
+    void UpdateInputLabel()
+    {
+        if (_inputText is null) return;
+        string label = InputIndicator.CurrentLabel();
+        if (_inputText.Text != label) _inputText.Text = label;
+    }
     public void ShowClock(string text, string tip)
     {
         _clockText.Text = text;
