@@ -106,6 +106,26 @@ internal sealed class BackdropWindow : Window
             });
     }
 
+    /// <summary>
+    /// 开机时用：整块玻璃从屏幕底边下方滑上来（fromDiu = 起始下移距离）。
+    /// 只动 RenderTransform，不触发布局；日常没有任何动画。
+    /// </summary>
+    public void SlideIn(int ms, double fromDiu)
+    {
+        var slide = new TranslateTransform(0, fromDiu);
+        _tint.RenderTransform = slide;
+        var motion = new System.Windows.Media.Animation.DoubleAnimation(fromDiu, 0, TimeSpan.FromMilliseconds(ms))
+        {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+        };
+        motion.Completed += (_, _) =>
+        {
+            slide.Y = 0;
+            slide.BeginAnimation(TranslateTransform.YProperty, null);
+        };
+        slide.BeginAnimation(TranslateTransform.YProperty, motion);
+    }
+
     public void SetVisible(bool visible)
     {
         if (Handle == IntPtr.Zero || visible == _visible) return;

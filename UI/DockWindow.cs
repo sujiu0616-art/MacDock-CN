@@ -339,33 +339,41 @@ internal sealed class DockWindow : Window
         LaunchpadWindow.OpenChanged += OnLaunchpadOpenChanged;
     }
 
-    /// <summary>开机自启时的淡入时长（日常打开 Dock 不会有动画）。</summary>
-    const int StartupFadeMs = 500;
+    /// <summary>开机自启时"从下往上滑出"的时长（日常打开 Dock 没有任何动画）。</summary>
+    const int StartupSlideMs = 380;
 
-    void FadeInAtStartup()
+    void SlideInAtStartup()
     {
         try
         {
-            _canvas.Opacity = 0;
-            _canvas.BeginAnimation(UIElement.OpacityProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(StartupFadeMs))
-                {
-                    EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
-                });
-            _backdrop.FadeIn(StartupFadeMs);
-            _menuBars?.FadeIn(StartupFadeMs);
-            Log.Info($"StartupFade: {StartupFadeMs}ms (dock, plate, menu bar)");
+            // 起始位置：整块 Dock 在屏幕底边下方（板高 + 边距），然后上滑到 0
+            double from = _m.EdgeGap + _m.PlateThickness;
+            var slide = new TranslateTransform(0, from);
+            _canvas.RenderTransform = slide;
+            var motion = new System.Windows.Media.Animation.DoubleAnimation(from, 0, TimeSpan.FromMilliseconds(StartupSlideMs))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut },
+            };
+            // 动画结束后把基值归零再卸掉动画，避免以后清动画时 Dock 弹回屏幕下方
+            motion.Completed += (_, _) =>
+            {
+                slide.Y = 0;
+                slide.BeginAnimation(TranslateTransform.YProperty, null);
+            };
+            slide.BeginAnimation(TranslateTransform.YProperty, motion);
+            _backdrop.SlideIn(StartupSlideMs, from);
+            Log.Info($"StartupSlide: {StartupSlideMs}ms, from {from:0} DIU (dock + plate)");
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Fading the shell in at startup");
+            Log.Error(ex, "Sliding the dock in at startup");
         }
     }
 
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
-        if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) FadeInAtStartup();
+        if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) SlideInAtStartup();
         Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms at={DateTime.Now:HH:mm:ss.fff} procStart={System.Diagnostics.Process.GetCurrentProcess().StartTime:HH:mm:ss.fff}");
         Place();
     }
@@ -2039,8 +2047,10 @@ internal sealed class DockWindow : Window
     /// <summary>Like the Dock, step aside while a full-screen app (video, game, presentation) is in front.</summary>
     void OnFullscreenApp(bool fullscreen)
     {
-        // Explorer tells every app bar, whatever monitor the app is on (and sometimes reports the desktop).
-        if (fullscreen && !Displays.IsFullscreenAppOn(_hwnd)) return;
+        // Explorer 的 ABN_FULLSCREENAPP 只代表"有窗口盖住了 app bar 那条"，不等于应用全屏
+        // （联想电脑管家的开机弹窗、TopMost 的 H5 弹窗都会触发）。这里改用我们自己的判定：
+        // 只有真正盖住整块屏的窗口才算全屏。
+        if (fullscreen && !DetectFullscreenApp()) return;
         SetFullscreen(fullscreen);
     }
 
@@ -2048,6 +2058,14 @@ internal sealed class DockWindow : Window
     /// 收起 / 放回 Dock 与菜单栏。macOS 在有全屏应用时也是把这两条都收起来。
     /// 由 Explorer 的 ABN_FULLSCREENAPP 或我们自己的检测（见 <see cref="DetectFullscreenApp"/>）驱动 ——
     /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
+    /// <summary>这些进程的"全屏"窗口是厂商工具/通知弹窗，不是应用全屏。</summary>
+    static readonly System.Collections.Generic.HashSet<string> OemNoise = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "LenovoPcManager", "LenovoTray", "LenovoVantage", "LenovoVantageService", "SmartEngineHost",
+        "SmartEngineHost64", "SmartEngineHostN64", "SmartEngineTray", "NahimicSvc64", "nahimicNotifSys",
+        "HuionTablet", "clouddrive_desktop_widget", "Taskmgr",
+    };
+
     DateTime _fullscreenWantedSince = DateTime.MinValue;
     const double FullscreenDebounceSeconds = 3.0;   // 只有"持续 3 秒"的全屏才算数（开机时有 2~3 秒的临时全屏窗口）
 
@@ -2112,6 +2130,7 @@ internal sealed class DockWindow : Window
             if (foreground == IntPtr.Zero) return "none";
             string className = GetClassName(foreground);
             GetWindowThreadProcessId(foreground, out uint pid);
+
             string process = "?";
             try { process = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch (Exception) { }
             var titleBuffer = new System.Text.StringBuilder(256);
@@ -2148,6 +2167,14 @@ internal sealed class DockWindow : Window
         GetWindowThreadProcessId(foreground, out uint pid);
         if (pid == Environment.ProcessId) return false;
 
+        // 厂商工具/系统通知类进程：它们会画满整屏，但不是应用全屏（联想电脑管家开机弹窗就是这种）。
+        try
+        {
+            string owner = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+            if (OemNoise.Contains(owner)) return false;
+        }
+        catch (Exception) { }
+
         if (!GetWindowRect(foreground, out var rect)) return false;
         var display = CurrentDisplay();
         var bounds = display.Bounds;
@@ -2162,13 +2189,10 @@ internal sealed class DockWindow : Window
             && rect.Right >= bounds.Right - tolerance && rect.Bottom >= bounds.Bottom - tolerance)
             return true;
 
-        // 情况二：无标题栏 + 铺满工作区。bilibili / MPC-BE 这类播放器的"全屏"只是让开了 appbar，
-        // 屏幕上看就是全屏视频，Dock 压在上面同样难看。
-        long style = (long)GetWindowLongPtr(foreground, GWL_STYLE);   // WS_CAPTION = WS_BORDER | WS_DLGFRAME
-        if ((style & 0x00C00000L) != 0) return false;   // WS_CAPTION
-        var work = display.Work;
-        return rect.Left <= work.Left + tolerance && rect.Top <= work.Top + tolerance
-               && rect.Right >= work.Right - tolerance && rect.Bottom >= work.Bottom - tolerance;
+        // 只有"盖住整块屏"才算全屏。原来还有一条"无标题栏 + 铺满工作区"，被联想电脑管家的
+        // 开机 H5 弹窗（pcm_h5_msg，2559x1433 @ (0,39)，正好铺满工作区）误判，导致开机时
+        // Dock 与菜单栏被收起十几秒。播放器真正的全屏仍然会被识别。
+        return false;
     }
 
     /// <summary>--menu：在固定位置弹一个样例菜单（只用于截图验收外观）。</summary>
