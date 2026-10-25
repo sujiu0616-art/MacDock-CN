@@ -106,8 +106,9 @@ internal sealed class DockWindow : Window
     IntPtr _placedMonitor;
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
-    /// <summary>常驻的全屏检测：Explorer 的 ABN_FULLSCREENAPP 在任务栏被隐藏后不可靠，自己每 500ms 看一眼。</summary>
-    DateTime _lastStripSweep = DateTime.MinValue;   // 全盘扫描（StripGuard）上次执行时间
+    /// <summary>全屏检测心跳：任务栏被隐藏后 Explorer 的 ABN_FULLSCREENAPP 不可靠，自己每 120ms 看一眼。</summary>
+    DateTime _lastStripSweep = DateTime.MinValue;   // 上次全盘扫描时间（~2 秒一次）
+    bool _stripSweeping;   // 后台全盘扫描进行中（避免叠跑）
 
     ForegroundWatcher? _foregroundWatcher;   // 前台/尺寸变化即时触发全屏检测
     readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(120) };   // 120ms：全屏入场要"跟手"，500ms 会明显慢半拍
@@ -244,10 +245,18 @@ internal sealed class DockWindow : Window
             if ((DateTime.UtcNow - _lastStripSweep).TotalSeconds >= 2)
             {
                 _lastStripSweep = DateTime.UtcNow;
-                StripGuard.Sweep();
+                if (!_stripSweeping)
+                {
+                    _stripSweeping = true;
+                    _ = Task.Run(() =>
+                    {
+                        try { StripGuard.Sweep(); } finally { _stripSweeping = false; }
+                    });
+                }
             }
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
+        UiWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
 
         // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
