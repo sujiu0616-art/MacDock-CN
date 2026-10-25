@@ -149,12 +149,7 @@ internal sealed class MenuBarWindow : Window
         Content = _root;
     }
 
-    const int SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
-
     const int RDW_INVALIDATE = 0x0001, RDW_ERASE = 0x0004, RDW_UPDATENOW = 0x0100, RDW_ALLCHILDREN = 0x0080;
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    static extern bool ShowWindow(IntPtr hwnd, int command);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, int flags);
@@ -374,19 +369,11 @@ internal sealed class MenuBarWindow : Window
     /// </summary>
     void RepaintSurface()
     {
+        // 只标脏重画，绝不再 Hide/Show 窗口：
+        // 浏览器每切一个标签就改一次标题，Hide/Show 会把 DWM 合成搞出黑帧（火狐在前台时最明显）。
+        // 之前那个 hide/show 是为清"应用名重影"，真凶已查明是 Firefox 的 Battery Watcher 窗口，
+        // 现在由 StripGuard 负责把它移走。
         _root.InvalidateVisual();
-        if (_hwnd == IntPtr.Zero) return;
-        // 分层窗口只按脏矩形上传表面，而背景 alpha 只有 1 —— 旧字形所在区域几乎"没有变化"，
-        // 于是永远不会被重传（实测 RedrawWindow 与 _root.Opacity 抖动都清不掉）。
-        // 只有让窗口重新生成整块表面才行：同一帧里 Hide → Show → 整窗重绘，肉眼看不到闪烁。
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            if (_hwnd == IntPtr.Zero) return;
-            ShowWindow(_hwnd, SW_HIDE);
-            ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
-            RedrawWindow(_hwnd, IntPtr.Zero, IntPtr.Zero,
-                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-        }), System.Windows.Threading.DispatcherPriority.Render);
     }
 
     /// <summary>

@@ -27,6 +27,25 @@ internal static class StripGuard
     const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
 
     static readonly HashSet<IntPtr> _hidden = new();
+
+    /// <summary>已知会赖在菜单栏上、且藏掉无害的小窗（目前只有火狐的电池守卫窗）。</summary>
+    static readonly HashSet<string> KnownStrays = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "MozillaBatteryClass",
+    };
+
+    /// <summary>
+    /// 绝对不能碰的类：浏览器合成器、Windows 边框/输入窗口、Electron/Chrome 的宿主窗口。
+    /// 实测把它们藏掉会直接黑屏（Firefox 的 MozillaCompositorWindowClass 就是这样）。
+    /// </summary>
+    static bool IsProtected(string className) =>
+        className.StartsWith("Mozilla", StringComparison.OrdinalIgnoreCase) && !KnownStrays.Contains(className)
+        || className.StartsWith("Chrome_", StringComparison.OrdinalIgnoreCase)
+        || className.StartsWith("Windows.UI", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Compositor", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("PointerSource", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("Input", StringComparison.OrdinalIgnoreCase)
+        || className.Contains("DirectComposition", StringComparison.OrdinalIgnoreCase);
     static WinEventProc? _proc;          // 必须保住委托，否则被 GC 回收
     static IntPtr _showHook, _moveHook;
     static RECT _strip;
@@ -51,6 +70,26 @@ internal static class StripGuard
         _moveHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero, _proc, 0, 0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         if (_showHook == IntPtr.Zero) Log.Info("StripGuard: the show hook was refused (falling back to polling)");
+    }
+
+    /// <summary>把上一版误藏的浏览器合成器窗口显示回来（它们是我们藏掉的，不是程序自己藏的）。</summary>
+    public static void RepairWronglyHidden()
+    {
+        try
+        {
+            EnumWindows((hwnd, _) =>
+            {
+                string className = GetClassName(hwnd);
+                if (className.Contains("Compositor", StringComparison.OrdinalIgnoreCase)
+                    && !IsWindowVisible(hwnd))
+                {
+                    ShowWindow(hwnd, SW_SHOWNA);
+                    Log.Info($"StripGuard: restored {className}");
+                }
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch (Exception) { }
     }
 
     public static void Uninstall()
@@ -104,6 +143,9 @@ internal static class StripGuard
             if (pid == Environment.ProcessId) return false;
 
             string className = GetClassName(hwnd);
+            if (IsProtected(className)) return false;   // 浏览器合成器 / 系统输入窗：碰了就黑屏
+
+            // 白名单优先：已知的小窗直接藏，其余的只按"小且与条相交"处理（尺寸限制见上）
             // 系统外壳类不碰：桌面、任务栏、输入法候选、开始菜单宿主、通知宿主
             if (className is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Progman" or "WorkerW"
                 or "EdgeUiInputTopWndClass" or "ForegroundStaging" or "Windows.UI.Core.CoreWindow"

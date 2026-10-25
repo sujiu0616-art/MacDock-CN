@@ -238,6 +238,7 @@ internal sealed class DockWindow : Window
         };
         _fullscreenCheck.Start();
         UpdateStripGuard();
+        StripGuard.RepairWronglyHidden();
         Dispatcher.BeginInvoke(new Action(StripGuard.Sweep), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         // 启动把图标都解完之后做一次紧凑 GC + trim
         Dispatcher.BeginInvoke(new Action(() => Core.Memory.Compact()),
