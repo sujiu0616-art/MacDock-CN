@@ -1,9 +1,16 @@
+using System;
+using System.Runtime.InteropServices;
 using static MacDock.Interop.NativeMethods;
 
 namespace MacDock.Core;
 
 internal static class WindowActions
 {
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hwnd);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    static readonly IntPtr HWND_TOP = IntPtr.Zero;
     /// <summary>Restores (if minimized) and brings a window to the front.</summary>
     public static void Activate(IntPtr hwnd)
     {
@@ -19,8 +26,48 @@ internal static class WindowActions
             ShowWindow(hwnd, SW_RESTORE);
             if (IsIconic(hwnd)) PostMessage(hwnd, WM_SYSCOMMAND, (IntPtr)0xF120 /* SC_RESTORE */, IntPtr.Zero);
         }
-        // Allowed because the click on the dock was the last input; the fallback covers the rest.
-        if (!SetForegroundWindow(hwnd)) SwitchToThisWindow(hwnd, true);
+        ForceForeground(hwnd);
+    }
+
+    /// <summary>
+    /// 逐级降级地把窗口切到前台。Windows 的前台锁会让 SetForegroundWindow 直接返回 false，
+    /// 单靠它 + SwitchToThisWindow 会"点了没反应"（用户会描述成应用无响应）。
+    /// </summary>
+    static bool ForceForeground(IntPtr hwnd)
+    {
+        if (SetForegroundWindow(hwnd)) return true;
+
+        var foreground = GetForegroundWindow();
+        uint current = GetCurrentThreadId();
+        uint targetThread = GetWindowThreadProcessId(hwnd, out _);
+        uint foregroundThread = foreground != IntPtr.Zero ? GetWindowThreadProcessId(foreground, out _) : 0;
+
+        bool attachedFg = false, attachedTarget = false;
+        try
+        {
+            if (foregroundThread != 0 && foregroundThread != current)
+                attachedFg = AttachThreadInput(current, foregroundThread, true);
+            if (targetThread != 0 && targetThread != current && targetThread != foregroundThread)
+                attachedTarget = AttachThreadInput(current, targetThread, true);
+
+            BringWindowToTop(hwnd);
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            if (SetForegroundWindow(hwnd)) return true;
+        }
+        finally
+        {
+            if (attachedTarget) AttachThreadInput(current, targetThread, false);
+            if (attachedFg) AttachThreadInput(current, foregroundThread, false);
+        }
+
+        // 最后一招：模拟一次 ALT 抬起，解除前台锁后再切
+        keybd_event(0x12 /* VK_MENU */, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        SwitchToThisWindow(hwnd, true);
+        if (GetForegroundWindow() == hwnd) return true;
+
+        Log.Info($"Activate: could not bring hwnd {hwnd} to the front (error {Marshal.GetLastWin32Error()})");
+        return false;
     }
 
     /// <summary>Minimizes through the window's own system command, so the app sees it and animates.</summary>
@@ -78,7 +125,21 @@ internal static class WindowActions
         // 提权进程（UIPI）会无视我们的 ShowWindow：确认一下有没有真的显示出来，把结论写进日志。
         bool shown = revealed.Exists(h => IsWindowVisible(h) && !IsIconic(h));
         if (shown) Log.Info($"Surfaced {revealed.Count} window(s) of pid {pid}");
-        else Log.Info($"Cannot surface pid {pid}: the window belongs to an elevated process (UIPI blocks it)");
+        else
+        {
+            // 不要一律甩锅给 UIPI：先看是不是真的权限更高（打不开进程句柄），否则就是窗口自己不肯显示。
+            string reason = "the window refused to show (ShowWindow had no effect)";
+            try
+            {
+                using var probe = System.Diagnostics.Process.GetProcessById((int)pid);
+                _ = probe.Handle;   // 能拿到句柄 = 不是 UIPI 拦截
+            }
+            catch (Exception)
+            {
+                reason = "the process runs at a higher integrity level (UIPI blocks us)";
+            }
+            Log.Info($"Cannot surface pid {pid}: {reason}");
+        }
         return true;
     }
 
