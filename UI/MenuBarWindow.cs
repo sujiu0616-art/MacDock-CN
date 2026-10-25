@@ -142,6 +142,11 @@ internal sealed class MenuBarWindow : Window
         Content = _root;
     }
 
+    const int RDW_INVALIDATE = 0x0001, RDW_ERASE = 0x0004, RDW_UPDATENOW = 0x0100, RDW_ALLCHILDREN = 0x0080;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, int flags);
+
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -344,7 +349,30 @@ internal sealed class MenuBarWindow : Window
             });
     }
 
-    public void ShowAppName(string name) => _appName.Text = name;
+    public void ShowAppName(string name)
+    {
+        if (_appName.Text == name) return;
+        _appName.Text = name;
+        RepaintSurface();
+    }
+
+    /// <summary>
+    /// 强制整块分层表面重绘。分层窗口只按脏矩形上传，换字后旧字形会留在没被重传的区域
+    /// （看到的效果就是"Firefox"叠在一段灰色旧文字上）。
+    /// </summary>
+    void RepaintSurface()
+    {
+        _root.InvalidateVisual();
+        if (_hwnd != IntPtr.Zero)
+        {
+            RedrawWindow(_hwnd, IntPtr.Zero, IntPtr.Zero,
+                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        }
+        // 兜底：不透明度抖一下，逼 WPF 重新生成整块表面
+        double opacity = _root.Opacity;
+        _root.Opacity = opacity - 0.001;
+        Dispatcher.BeginInvoke(new Action(() => _root.Opacity = opacity), System.Windows.Threading.DispatcherPriority.Render);
+    }
 
     /// <summary>
     /// Shows the date and time. <see cref="MenuBars"/> owns when the clock ticks and words the
