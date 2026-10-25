@@ -97,7 +97,7 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
                 ((Image)view.Child).Source = icon.Icon;
                 break;
             case nameof(NotifyIcon.Title) when _views.TryGetValue(icon, out var view):
-                view.ToolTip = Tip(icon);
+                view.Tag = Tip(icon);   // 名字变了下次悬停时取新值
                 break;
             case nameof(NotifyIcon.IsHidden):
                 // 某些程序会把图标反复隐藏/显示（比如播放器的"仅在有提示时出现"）：合成一次重建，
@@ -172,19 +172,19 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             CornerRadius = new CornerRadius(4),
             Background = Brushes.Transparent,
             VerticalAlignment = VerticalAlignment.Stretch,
-            ToolTip = Tip(icon),
         };
-        ToolTipService.SetInitialShowDelay(view, 600);
 
         view.MouseEnter += (_, _) =>
         {
             view.Background = HoverBrush;
+            NameTip.ShowFor(view, Tip(icon));
             SetPlacement(icon, view);
             icon.IconMouseEnter(MouseParam());
         };
         view.MouseLeave += (_, _) =>
         {
             view.Background = Brushes.Transparent;
+            NameTip.HideTip();
             icon.IconMouseLeave(MouseParam());
         };
         view.MouseMove += (_, _) => icon.IconMouseMove(MouseParam());

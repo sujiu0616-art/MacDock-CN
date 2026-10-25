@@ -28,6 +28,9 @@ internal sealed class MenuBarWindow : Window
     readonly string _device;
     readonly MenuBarGlass _glass = new();
     readonly Grid _root = new() { Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) }; // alpha 1: clickable
+    string? _clockTip;      // 用 NameTip 自己画，别用 WPF ToolTip（会跑到屏幕左上角）
+    string? _statusTip;
+
     readonly Border _logo;
     readonly TextBlock _appName;
     readonly TrayIconsPanel? _tray;
@@ -106,11 +109,15 @@ internal sealed class MenuBarWindow : Window
         statusRow.Children.Add(_battery);
         _status = Clickable(statusRow, 6);
         _status.MouseLeftButtonUp += (_, _) => ShellFlyouts.QuickSettings();
+        _status.MouseEnter += (_, _) => NameTip.ShowFor(_status, _statusTip);
+        _status.MouseLeave += (_, _) => NameTip.HideTip();
 
         _clockText = Text("", 13, FontWeights.Normal);
         _clockText.VerticalAlignment = VerticalAlignment.Center;
         _clock = Clickable(_clockText, 8);
         _clock.MouseLeftButtonUp += (_, _) => ShellFlyouts.NotificationCenter();
+        _clock.MouseEnter += (_, _) => NameTip.ShowFor(_clock, _clockTip);
+        _clock.MouseLeave += (_, _) => NameTip.HideTip();
 
         var left = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0) };
         left.Children.Add(_logo);
@@ -142,7 +149,12 @@ internal sealed class MenuBarWindow : Window
         Content = _root;
     }
 
+    const int SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
+
     const int RDW_INVALIDATE = 0x0001, RDW_ERASE = 0x0004, RDW_UPDATENOW = 0x0100, RDW_ALLCHILDREN = 0x0080;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hwnd, int command);
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern bool RedrawWindow(IntPtr hwnd, IntPtr rect, IntPtr region, int flags);
@@ -363,15 +375,18 @@ internal sealed class MenuBarWindow : Window
     void RepaintSurface()
     {
         _root.InvalidateVisual();
-        if (_hwnd != IntPtr.Zero)
+        if (_hwnd == IntPtr.Zero) return;
+        // 分层窗口只按脏矩形上传表面，而背景 alpha 只有 1 —— 旧字形所在区域几乎"没有变化"，
+        // 于是永远不会被重传（实测 RedrawWindow 与 _root.Opacity 抖动都清不掉）。
+        // 只有让窗口重新生成整块表面才行：同一帧里 Hide → Show → 整窗重绘，肉眼看不到闪烁。
+        Dispatcher.BeginInvoke(new Action(() =>
         {
+            if (_hwnd == IntPtr.Zero) return;
+            ShowWindow(_hwnd, SW_HIDE);
+            ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             RedrawWindow(_hwnd, IntPtr.Zero, IntPtr.Zero,
                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-        }
-        // 兜底：不透明度抖一下，逼 WPF 重新生成整块表面
-        double opacity = _root.Opacity;
-        _root.Opacity = opacity - 0.001;
-        Dispatcher.BeginInvoke(new Action(() => _root.Opacity = opacity), System.Windows.Threading.DispatcherPriority.Render);
+        }), System.Windows.Threading.DispatcherPriority.Render);
     }
 
     /// <summary>
@@ -389,7 +404,7 @@ internal sealed class MenuBarWindow : Window
     public void ShowClock(string text, string tip)
     {
         _clockText.Text = text;
-        _clock.ToolTip = string.IsNullOrEmpty(tip) ? text : tip;
+        _clockTip = string.IsNullOrEmpty(tip) ? text : tip;
     }
 
     public void ShowStatus(SystemStatus s)
@@ -426,7 +441,7 @@ internal sealed class MenuBarWindow : Window
 
         var tips = new List<string> { wifiTip, volumeTip };
         if (s.HasBattery) tips.Add(batteryTip);
-        _status.ToolTip = string.Join("\n", tips);
+        _statusTip = string.Join(" · ", tips);
     }
 
     // ───────────────────────── Building blocks ─────────────────────────
