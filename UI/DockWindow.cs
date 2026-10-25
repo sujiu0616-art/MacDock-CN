@@ -231,6 +231,10 @@ internal sealed class DockWindow : Window
         };
         _fullscreenCheck.Tick += (_, _) =>
         {
+            // 顺手清掉压在菜单栏那条上的"别人的小窗"（Firefox 的 Battery Watcher：135×37 贴在 (0,0)，
+            // 会透过半透明菜单栏显示在应用名下面，看着像文字残影）
+            // 菜单栏 26 DIP；150% 缩放下约 39px，这里给到 60px 的余量，只清"完全在这一条里"的小窗
+            RogueWindows.Sweep(60);
             if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
         };
         _fullscreenCheck.Start();
