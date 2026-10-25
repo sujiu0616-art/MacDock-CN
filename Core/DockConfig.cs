@@ -26,6 +26,9 @@ internal sealed class DockSettings
     /// <summary>Win+1 … Win+9 start / activate the dock's apps (taken away from Explorer while the dock runs).</summary>
     public bool NumberShortcuts { get; set; } = true;
 
+    /// <summary>打开启动台的按键（Windows 虚拟键码，例如 0xB3 = 键盘上的"媒体选台"；0 = 不绑定）。</summary>
+    public int LaunchpadKey { get; set; }
+
     /// <summary>The macOS-style menu bar along the top of the screen (clock, tray icons, active app).</summary>
     public bool MenuBar { get; set; } = true;
 

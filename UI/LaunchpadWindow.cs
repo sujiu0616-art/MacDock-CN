@@ -254,6 +254,12 @@ internal sealed class LaunchpadWindow : Window
     }
 
     /// <summary>打开启动台（Dock 以后的入口）：同时只许有一个。</summary>
+    /// <summary>启动台当前是否开着（F4 用来做开关）。</summary>
+    public static bool IsOpen => _open is not null;
+
+    /// <summary>关掉当前打开的启动台（没有就什么也不做）。</summary>
+    public static void CloseIfOpen() => _open?.Close();
+
     public static LaunchpadWindow Open()
     {
         if (_open is { } existing)

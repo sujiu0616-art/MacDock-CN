@@ -12,7 +12,8 @@ namespace MacDock.UI;
 /// </summary>
 internal sealed class MenuBars : IDisposable
 {
-    static string DesktopName => Loc.T("File Explorer"); // the desktop belongs to the file manager, as on macOS
+    // 桌面不上报应用名：macOS 那里显示 Finder，但在这里显示"资源管理器"只会让人以为抓错了前台窗口。
+    static string DesktopName => ""; // the desktop belongs to the file manager, as on macOS
 
     // Shell surfaces that come and go in front (Start, search, flyouts): the app name stays put.
     static readonly HashSet<string> TransientProcesses = new(StringComparer.OrdinalIgnoreCase)

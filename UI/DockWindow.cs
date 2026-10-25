@@ -316,6 +316,7 @@ internal sealed class DockWindow : Window
         if (_config.Settings.NumberShortcuts) _numberShortcuts = new NumberShortcuts(OnNumberShortcut);
         StartTrashWatch();
 
+        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _tracker = new WindowTracker(_hwnd);
         _tracker.MinimizeTarget = MinimizeTargetFor;
         _tracker.Changed += SyncWindows;
@@ -365,6 +366,7 @@ internal sealed class DockWindow : Window
         _stack?.Close();
         Try(() => _appBar?.Dispose(), "Releasing the Dock's screen space");
         _appBar = null;
+        KeyLauncher.Uninstall();
         _followTimer.Stop();
         _fullscreenCheck.Stop();
         _trashTimer?.Stop();
@@ -1817,6 +1819,7 @@ internal sealed class DockWindow : Window
         if (!_pauseReasons.Remove(reason) || _pauseReasons.Count > 0) return;
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
+        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _menuBars?.SetPaused(false);
         _trashTimer?.Start();
         Revalidate();
