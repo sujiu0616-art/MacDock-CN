@@ -68,7 +68,6 @@ internal sealed class MediaWatcher : IDisposable
             _anchorAt = Environment.TickCount64;
             Duration = timeline.EndTime - timeline.StartTime;
             _positionReadAt = Environment.TickCount64;
-            Log.Info($"TimelineDiag: start={timeline.StartTime} end={timeline.EndTime} pos={timeline.Position} maxSeek={timeline.MaxSeekTime} minSeek={timeline.MinSeekTime}");
         }
         catch (Exception) { }
     }

@@ -105,7 +105,6 @@ internal sealed class MenuBarWindow : Window
 
     void ToggleIsland()
     {
-        Log.Info($"IslandDiag: capsule clicked, open={IslandWindow.IsOpen}");
         EnsureMediaWatcher();
         if (IslandWindow.IsOpen) { IslandWindow.HideIsland(); return; }
         IslandWindow.ShowCentered(_hwnd, _media!);
@@ -256,7 +255,6 @@ internal sealed class MenuBarWindow : Window
             BorderBrush = Brushes.Transparent,
         };
         _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
-        _capsule.MouseDown += (_, _) => Log.Info("IslandDiag: capsule mouse down");
         _capsule.MouseEnter += (_, _) => UpdateCapsuleLook(hover: true);
         _capsule.MouseLeave += (_, _) => UpdateCapsuleLook(hover: false);
         _root.Children.Add(_capsule);
