@@ -72,6 +72,8 @@ internal sealed class MediaWatcher : IDisposable
         catch (Exception) { }
     }
 
+    System.Windows.Threading.DispatcherTimer? _persistTimer;
+
     public async void Start()
     {
         try
@@ -80,6 +82,12 @@ internal sealed class MediaWatcher : IDisposable
             if (_disposed) return;
             _manager.CurrentSessionChanged += (_, _) => _dispatcher.BeginInvoke(new Action(AttachCurrentSession));
             AttachCurrentSession();
+
+            // 每 15 秒把位置落盘一次（一次小 JSON 写入，成本可忽略）：
+            // 这样即使从不打开卡片，MacDock 重启后也能接着算位置。
+            _persistTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+            _persistTimer.Tick += (_, _) => { if (HasSession) PersistPosition(); };
+            _persistTimer.Start();
         }
         catch (Exception ex)
         {
@@ -144,6 +152,13 @@ internal sealed class MediaWatcher : IDisposable
     internal void RefreshTimeline() => ReadTimeline();
 
     /// <summary>用元数据里的准确时长覆盖 SMTC 的空值（网易云报告 end=0）。</summary>
+    /// <summary>把当前位置写盘（供下次启动恢复）。低频调用，不轮询。</summary>
+    public void PersistPosition()
+    {
+        if (string.IsNullOrWhiteSpace(Title)) return;
+        MediaPositionStore.Save(Title, Artist, CurrentPosition, IsPlaying);
+    }
+
     public void SetKnownDuration(TimeSpan duration)
     {
         if (duration > TimeSpan.Zero) Duration = duration;
@@ -172,7 +187,14 @@ internal sealed class MediaWatcher : IDisposable
             var props = await session.TryGetMediaPropertiesAsync();
             if (_disposed || session != _session) return;
 
-            if (Title != (props?.Title ?? "")) { Position = TimeSpan.Zero; _anchorAt = Environment.TickCount64; Duration = TimeSpan.Zero; }
+            if (Title != (props?.Title ?? ""))
+            {
+                // 换歌（或首次拿到标题）：先看磁盘里有没有"同一首歌的上次位置"，有就接着放
+                var resumed = MediaPositionStore.TryResume(props?.Title ?? "", Artist, Duration);
+                Position = resumed ?? TimeSpan.Zero;
+                _anchorAt = Environment.TickCount64;
+                if (resumed is null) Duration = TimeSpan.Zero;
+            }
             Title = props?.Title ?? "";
             Artist = props?.Artist ?? "";
             if (string.IsNullOrWhiteSpace(Artist)) Artist = props?.AlbumArtist ?? "";
@@ -257,6 +279,7 @@ internal sealed class MediaWatcher : IDisposable
 
     public void Dispose()
     {
+        _persistTimer?.Stop();
         _disposed = true;
         Detach();
         _manager = null;

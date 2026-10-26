@@ -42,6 +42,7 @@ internal sealed class IslandWindow : Window
     string _lyricsKey = "";
     bool _fetchingLyrics;
     int _lyricOffsetMs;
+    long _lastPersistAt;
     bool _pointerInside;
     bool? _optimisticPlaying;
 
@@ -293,6 +294,7 @@ internal sealed class IslandWindow : Window
         _open = null;
         if (island is null) return;
         island._ticker.Stop();          // 收起即停，零开销
+        island._media?.PersistPosition();   // 收起时落一次盘
         island._leaveTimer.Stop();
         island.Close();
     }
@@ -384,6 +386,13 @@ internal sealed class IslandWindow : Window
         // 歌词行：位置 + 用户偏移（网易云不报位置，残留误差靠配置里的 LyricOffsetMs 修）
         var lyricPosition = position + TimeSpan.FromMilliseconds(_lyricOffsetMs);
         _lyric.Text = _lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "";
+
+        // 每 5 秒把位置落盘：MacDock 自己重启后能接着算，而不是从 0 开始
+        if (Environment.TickCount64 - _lastPersistAt > 5000)
+        {
+            _lastPersistAt = Environment.TickCount64;
+            media.PersistPosition();
+        }
     }
 
     static string Format(TimeSpan value) => value.TotalHours >= 1
