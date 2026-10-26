@@ -2442,6 +2442,10 @@ internal sealed class DockWindow : Window
         if (GetWindowTextLength(root) == 0) return false;
 
         GetWindowThreadProcessId(root, out uint pid);
+        // 同一个进程的**另一个窗口**不算"用户切走了"：
+        // 实测游戏（燕云十六声）全屏时会把自己的另一个顶层窗口（title='yysls.exe'）顶到前台，
+        // 之前这里只比对 hwnd，于是被当成"切到别的应用"→ 1 秒后退出全屏 → Dock 弹出来。
+        if (pid == _fullscreenPid) return false;
         if (pid == Environment.ProcessId) return false;
         string name = ProcessNameOf(pid);
         if (name is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
