@@ -103,6 +103,9 @@ internal sealed class DockConfig
     /// <summary>歌词对齐偏移（毫秒），由 Dock 启动时从配置写入，供 IslandWindow 使用。</summary>
     public static int LyricOffsetMs { get; set; }
 
+    /// <summary>是否用"读网易云内存里的播放时钟"来拿真实进度（SMTC 时间轴恒为 0 时的正解）。</summary>
+    public static bool UseMemoryClock { get; set; } = true;
+
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MacDock");
 

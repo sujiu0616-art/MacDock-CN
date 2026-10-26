@@ -17,6 +17,9 @@ internal sealed class MediaWatcher : IDisposable
 {
     readonly Dispatcher _dispatcher;
     readonly PositionTracker _tracker = new();
+    readonly NetEaseClock _clock = new();     // 网易云内部播放时钟（内存只读），SMTC 无时间轴时用它
+    bool _clockLogged;
+    double _lastNativeSeconds = -1;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
     GlobalSystemMediaTransportControlsSession? _session;
     bool _disposed;
@@ -319,6 +322,8 @@ internal sealed class MediaWatcher : IDisposable
                 _tracker.Reanchor(resumed ?? TimeSpan.Zero, Environment.TickCount64,
                                   resumed is null ? TimeSpan.Zero : Duration, known);
                 _firstMetadataApplied = true;
+                _clock.Invalidate();          // 换歌后内部时钟对象可能重建，重新校准
+                _lastNativeSeconds = -1;
             }
 
             var art = await LoadArtCachedAsync(key, props.Thumbnail);
@@ -403,6 +408,7 @@ internal sealed class MediaWatcher : IDisposable
         {
             _ = RunCommand(session.TryChangePlaybackPositionAsync(position.Ticks), "Seek");
             _tracker.Reanchor(position, Environment.TickCount64, Duration, known: true);
+            _clock.Invalidate();
         }
         catch (Exception ex) { Log.Error(ex, "Seeking"); }
     }
@@ -475,6 +481,37 @@ internal sealed class MediaWatcher : IDisposable
             }
             _noSessionTicks = 0;
 
+            // 真实时钟优先：命中后位置不再是"外推"，而是网易云自己的数
+            if (DockConfig.UseMemoryClock
+                && AppId.Contains("cloudmusic", StringComparison.OrdinalIgnoreCase)
+                && PlaybackState is State.Playing or State.Buffering)
+            {
+                if (!_clock.IsReady) _clock.EnsureScan();
+                if (_clock.TryGetSeconds(out double nativeSeconds))
+                {
+                    // 暂停时网易云会把这个值清零、恢复后接着走，所以只在播放中采信；
+                    // 换歌会让值大幅回退，这种情况直接接受（它是真值）。
+                    // 合理性检查：时钟值不能超过已知时长（否则扫到了别的计数器，作废重扫）
+                    if (Duration > TimeSpan.Zero && nativeSeconds > Duration.TotalSeconds + 5)
+                    {
+                        Log.Info($"Media: clock value {nativeSeconds:F1}s exceeds duration {Duration.TotalSeconds:F1}s - rescan");
+                        _clock.Invalidate();
+                        return;
+                    }
+                    if (nativeSeconds >= _lastNativeSeconds - 3 || nativeSeconds < 3)
+                    {
+                        if (!_clockLogged)
+                        {
+                            _clockLogged = true;
+                            Log.Info($"Media: native clock active (pid={_clock.ProcessId} addr=0x{_clock.Address:X})");
+                        }
+                        _lastNativeSeconds = nativeSeconds;
+                        _tracker.Reanchor(TimeSpan.FromSeconds(nativeSeconds), Environment.TickCount64,
+                                          Duration, known: true);
+                    }
+                }
+            }
+
             if (_tracker.Tick(Environment.TickCount64))
             {
                 Log.Info($"Media: single-track loop detected - rewound (loop #{_tracker.LoopRewinds})");
@@ -532,6 +569,7 @@ internal sealed class MediaWatcher : IDisposable
         _positionTimer?.Stop();
         _livenessTimer?.Stop();
         _disposed = true;
+        _clock.Dispose();
         Detach();
         _manager = null;
     }
