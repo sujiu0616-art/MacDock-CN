@@ -95,9 +95,12 @@ internal static class TaskbarState
             }
             // 强制隐藏：先把"自动隐藏"关掉 —— 否则 Explorer 会接管这条窗口（重新 Show 出来做滑入滑出），
             // 我们刚 SW_HIDE 掉它又会自己回来。关掉之后再硬隐藏，窗口就稳定处于隐藏状态。
-            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
+            // 关键：设成"自动隐藏"而不是"关自动隐藏"。
+            // 自动隐藏的任务栏**不占工作区**（否则它那条 72px 的预留会把我们的菜单栏/Dock 挤开），
+            // 同时窗口仍然由我们 SW_HIDE 掉。
+            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
             // 强隐藏模式下注册表也写"不自动隐藏"：否则下次开机 Explorer 会先按自动隐藏把它摆出来一瞬。
-            PersistAutoHide(false);
+            PersistAutoHide(true);
         }
         HideWindows(tray);
         return true;
@@ -125,8 +128,11 @@ internal static class TaskbarState
             }
             // 强制隐藏：先把"自动隐藏"关掉 —— 否则 Explorer 会接管这条窗口（重新 Show 出来做滑入滑出），
             // 我们刚 SW_HIDE 掉它又会自己回来。关掉之后再硬隐藏，窗口就稳定处于隐藏状态。
-            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
-            PersistAutoHide(false);
+            // 关键：设成"自动隐藏"而不是"关自动隐藏"。
+            // 自动隐藏的任务栏**不占工作区**（否则它那条 72px 的预留会把我们的菜单栏/Dock 挤开），
+            // 同时窗口仍然由我们 SW_HIDE 掉。
+            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
+            PersistAutoHide(true);
         }
         HideWindows(tray);
         return true;
@@ -180,7 +186,10 @@ internal static class TaskbarState
                 Log.Info($"Taskbar parked offscreen (original rect {original.Left},{original.Top} {original.Width}x{original.Height})");
             }
             // 先确保不会被自动隐藏"救"回画面里
-            if ((GetState(tray) & ABS_AUTOHIDE) != 0) SetState(tray, ABS_ALWAYSONTOP);
+            // 关键：设成"自动隐藏"而不是"关自动隐藏"。
+            // 自动隐藏的任务栏**不占工作区**（否则它那条 72px 的预留会把我们的菜单栏/Dock 挤开），
+            // 同时窗口仍然由我们 SW_HIDE 掉。
+            if ((GetState(tray) & ABS_AUTOHIDE) == 0) SetState(tray, ABS_AUTOHIDE | ABS_ALWAYSONTOP);
             PersistAutoHide(false);
             MoveAway(tray);
         }

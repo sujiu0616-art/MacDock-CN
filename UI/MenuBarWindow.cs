@@ -253,7 +253,7 @@ internal sealed class MenuBarWindow : Window
         _placedMonitor = display.Handle;
 
         int height = (int)Math.Ceiling(BarHeight * display.Scale);
-        var bar = _appBar.SetPosition(ABE_TOP, display.Bounds, height);
+        var bar = _appBar.SetPosition(ABE_TOP, display.Bounds, height, ownEdge: true);   // 自己占住屏幕顶边
         var rect = new RECT(display.Bounds.Left, bar.Top, display.Bounds.Right, bar.Top + height);
         // Moving an app bar notifies the others, which move and notify back: only move when needed.
         if (!GetWindowRect(_hwnd, out var current) || !current.Equals(rect))

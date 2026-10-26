@@ -205,6 +205,11 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
                 var bar = Window.GetWindow(view);
                 if (bar is not null) NativeMethods.SetForegroundWindow(new WindowInteropHelper(bar).Handle);
             }
+            if (e.ChangedButton == MouseButton.Right)
+            {
+                GetCursorPos(out var cursor);
+            }
+            SetPlacement(icon, view);   // 右键前重算：应用拿这个矩形算菜单锚点
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
             e.Handled = true;
         };
@@ -214,18 +219,28 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
     static string? Tip(NotifyIcon icon) => string.IsNullOrWhiteSpace(icon.Title) ? null : icon.Title;
 
     /// <summary>The icon's rectangle on screen, in physical pixels (Shell_NotifyIconGetRect answers with it).</summary>
+    /// <summary>
+    /// 告诉 ManagedShell 这个托盘图标在屏幕上的矩形 —— 应用（微信/Qt、QQ 等）用它算右键菜单锚点。
+    /// 之前菜单跑到屏幕左下角，就是因为视图还没完成布局时这里给出 (0,0)-(0,0) 的退化矩形，
+    /// 应用只好把菜单夹到可见区角落。
+    /// </summary>
     void SetPlacement(NotifyIcon icon, FrameworkElement view)
     {
         if (PresentationSource.FromVisual(view) is null) return;
+
         var topLeft = view.PointToScreen(new Point(0, 0));
         var bottomRight = view.PointToScreen(new Point(view.ActualWidth, view.ActualHeight));
-        icon.Placement = new MsNative.Rect
+        int left = (int)Math.Round(topLeft.X), top = (int)Math.Round(topLeft.Y);
+        int right = (int)Math.Round(bottomRight.X), bottom = (int)Math.Round(bottomRight.Y);
+
+        if (right - left <= 0 || bottom - top <= 0)
         {
-            Left = (int)topLeft.X,
-            Top = (int)topLeft.Y,
-            Right = (int)bottomRight.X,
-            Bottom = (int)bottomRight.Y,
-        };
+            if (!GetCursorPos(out var cursor)) return;
+            left = cursor.X; right = cursor.X + 1;
+            top = cursor.Y; bottom = cursor.Y + 1;
+        }
+
+        icon.Placement = new MsNative.Rect { Left = left, Top = top, Right = right, Bottom = bottom };
     }
 
     /// <summary>The cursor position packed as the tray callbacks expect it (x low word, y high word).</summary>
