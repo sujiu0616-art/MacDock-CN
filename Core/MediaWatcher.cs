@@ -97,6 +97,7 @@ internal sealed class MediaWatcher : IDisposable
             _manager.SessionsChanged -= OnSessionsChanged;
             _manager.SessionsChanged += OnSessionsChanged;
             StartLivenessWatch();
+            StartPositionWatch();
             AttachBestSession();
         }
         catch (Exception ex)
@@ -524,6 +525,60 @@ internal sealed class MediaWatcher : IDisposable
         MediaPositionStore.Save(Title, Artist, CurrentPosition, IsPlaying);
     }
 
+    long _ceilingSinceMs;
+    int _noSessionTicks;        // 连续多少秒没有会话
+    long _lastSelfHealMs;       // 上次自愈时间（节流）
+
+
+    System.Windows.Threading.DispatcherTimer? _positionTimer;
+
+    /// <summary>
+    /// 单曲循环检测：网易云的时间轴恒为 0、也没有"换歌"事件（同一首歌重播），
+    /// 所以外推会一直停在天花板上。这里每秒看一眼，贴天花板超过 1.5 秒仍在播放就当归零重来。
+    /// </summary>
+    void StartPositionWatch()
+    {
+        if (_positionTimer is not null) return;
+        _positionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _positionTimer.Tick += (_, _) =>
+        {
+            if (_session is null)
+            {
+                // 会话空了：可能是应用刚退出（正常），也可能是睡眠唤醒后 SMTC 管理器失效（需要重建）。
+                // 每 10 秒试一次重建，最多每 30 秒一次，避免频繁请求。
+                _ceilingSinceMs = 0;
+                _noSessionTicks++;
+                var tickNow = Environment.TickCount64;
+                if (_noSessionTicks >= 10 && tickNow - _lastSelfHealMs > 30_000)
+                {
+                    _noSessionTicks = 0;
+                    _lastSelfHealMs = tickNow;
+                    Log.Info("Media: no session for a while - re-initializing SMTC manager");
+                    Restart();
+                }
+                return;
+            }
+            _noSessionTicks = 0;
+
+            if (!_positionKnown || Duration <= TimeSpan.Zero) { _ceilingSinceMs = 0; return; }
+            if (PlaybackState != State.Playing) { _ceilingSinceMs = 0; return; }
+
+            var now = Environment.TickCount64;
+            var position = CurrentPosition;
+            if (!MediaRules.IsAtCeiling(position, Duration)) { _ceilingSinceMs = 0; return; }
+
+            if (_ceilingSinceMs == 0) { _ceilingSinceMs = now; return; }
+            if (!MediaRules.ShouldRestartLoop(_ceilingSinceMs, now)) return;
+
+            Log.Info($"Media: single-track loop detected - rewinding anchor (was {position.TotalSeconds:F0}s of {Duration.TotalSeconds:F0}s)");
+            Position = TimeSpan.Zero;
+            _anchorAt = now;
+            _ceilingSinceMs = 0;
+            Changed?.Invoke();
+        };
+        _positionTimer.Start();
+    }
+
     System.Windows.Threading.DispatcherTimer? _persistTimer;
 
     public void StartPersistence()
@@ -537,6 +592,7 @@ internal sealed class MediaWatcher : IDisposable
     public void Dispose()
     {
         _persistTimer?.Stop();
+        _positionTimer?.Stop();
         _disposed = true;
         Detach();
         _manager = null;

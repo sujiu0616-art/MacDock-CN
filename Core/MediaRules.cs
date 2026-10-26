@@ -26,13 +26,17 @@ public static class MediaRules
     {
         if (sessions.Length == 0) return -1;
 
+        // 打分：正在播放优先；同为播放（或同为暂停）时，按时间轴最后更新时间取更活跃的那个
+        int bestIndex = 0;
+        long bestScore = long.MinValue;
         for (int i = 0; i < sessions.Length; i++)
-            if (sessions[i].Status == StatusPlaying) return i;
-
-        int best = 0;
-        for (int i = 1; i < sessions.Length; i++)
-            if (sessions[i].LastUpdatedUnixMs > sessions[best].LastUpdatedUnixMs) best = i;
-        return best;
+        {
+            bool playing = sessions[i].Status == StatusPlaying;
+            long recency = sessions[i].LastUpdatedUnixMs & 0x0FFF_FFFF_FFFFL;
+            long score = (playing ? 1L << 52 : 0L) + recency;
+            if (score > bestScore) { bestScore = score; bestIndex = i; }
+        }
+        return bestIndex;
     }
 
     /// <summary>SMTC 状态 → 四态（播放/暂停/缓冲/停止）。</summary>
@@ -66,6 +70,21 @@ public static class MediaRules
         var ceiling = duration > TimeSpan.FromSeconds(2) ? duration - TimeSpan.FromSeconds(1) : duration;
         return value > ceiling ? ceiling : value;
     }
+
+    /// <summary>位置是否已经贴到"时长-1s"的天花板（外推被截断的地方）。</summary>
+    public static bool IsAtCeiling(TimeSpan position, TimeSpan duration)
+    {
+        if (duration <= TimeSpan.Zero) return false;
+        var ceiling = duration > TimeSpan.FromSeconds(2) ? duration - TimeSpan.FromSeconds(1) : duration;
+        return position >= ceiling - TimeSpan.FromMilliseconds(150);
+    }
+
+    /// <summary>
+    /// 单曲循环：位置一直贴在天花板上、且仍在播放 —— 说明这首歌其实已经重新开始，
+    /// 元数据没变所以没有换歌事件。等 thresholdMs 毫秒后把锚点归零。
+    /// </summary>
+    public static bool ShouldRestartLoop(long ceilingSinceMs, long nowMs, int thresholdMs = 1500)
+        => ceilingSinceMs != 0 && nowMs - ceilingSinceMs >= thresholdMs;
 
     /// <summary>
     /// 位置是否可信：SMTC 时间轴为真、有落盘续算、或我们亲眼看到过换歌。
