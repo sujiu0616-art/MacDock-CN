@@ -122,7 +122,12 @@ internal sealed class NetEaseClock : IDisposable
     }
 
     /// <summary>驱动扫描（每秒调用一次即可，内部自带节流与去重）。</summary>
-    public void EnsureScan(int cooldownMs = 8_000)
+    /// <param name="expectedSeconds">
+    /// 我们独立估算的位置（只在"亲眼看到换歌、之后一直在跟"时可信）。
+    /// 传进来后扫描会优先选与之吻合的候选，用来排除"应用运行时长"这类同样 1:1 增长的计数器。
+    /// </param>
+    /// <param name="durationSeconds">已知时长，超过它的候选直接丢弃。</param>
+    public void EnsureScan(double? expectedSeconds = null, double? durationSeconds = null, int cooldownMs = 8_000)
     {
         lock (_gate)
         {
@@ -133,14 +138,14 @@ internal sealed class NetEaseClock : IDisposable
         }
         _ = Task.Run(() =>
         {
-            try { ScanOnce(); }
+            try { ScanOnce(expectedSeconds, durationSeconds); }
             catch (Exception ex) { Log.Error(ex, "NetEase clock scan"); }
             finally { lock (_gate) _scanning = false; }
         });
     }
 
     // ── 扫描 ────────────────────────────────────────────────────────────
-    void ScanOnce()
+    void ScanOnce(double? expectedSeconds, double? durationSeconds)
     {
         int pid = FindMainProcess();
         if (pid <= 0) return;
@@ -172,22 +177,40 @@ internal sealed class NetEaseClock : IDisposable
         if (second.Count == 0) { Log.Info($"Media: clock scan pid={pid} candidates={first.Count} no advancing"); return; }
 
         Thread.Sleep(420);
+        (long address, byte kind, double value, double score)? best = null;
+        int rejectedByDuration = 0;
         foreach (var item in second)
         {
             if (!TryReadValue(handle, item.address, item.kind, out double value)) continue;
             double deltaMs = (value - item.second) * 1000.0;
             if (deltaMs < 250 || deltaMs > 700) continue;
 
+            // 时长上限：网易云自己的"运行时长"这类计数器会在这一步被筛掉
+            if (durationSeconds is { } duration && value > duration + 3) { rejectedByDuration++; continue; }
+            if (value < 0) continue;
+
+            // 打分：有独立估算值时按吻合度；否则优先"秒"制（播放器内部多用 double 秒）
+            double score = expectedSeconds is { } expected
+                ? Math.Abs(value - expected)
+                : (item.kind == 1 ? 0 : 1);
+            if (best is null || score < best.Value.score)
+                best = (item.address, item.kind, value, score);
+        }
+
+        if (best is { } chosen)
+        {
+            // 预期值只用于排序，不做硬性拒绝：外推本身可能偏，不能因此否掉真值
             lock (_gate)
             {
-                _address = item.address;
-                _kind = item.kind;
+                _address = chosen.address;
+                _kind = chosen.kind;
                 _ready = true;
             }
-            Log.Info($"Media: clock found pid={pid} addr=0x{item.address:X} kind={(item.kind == 0 ? "ms" : "sec")} value={value:F1}s scanned={scanned / 1024 / 1024}MB");
+            Log.Info($"Media: clock found pid={pid} addr=0x{chosen.address:X} kind={(chosen.kind == 0 ? "ms" : "sec")} value={chosen.value:F1}s " +
+                     $"expected={(expectedSeconds.HasValue ? expectedSeconds.Value.ToString("F1") : "n/a")} rejectedByDuration={rejectedByDuration} scanned={scanned / 1024 / 1024}MB");
             return;
         }
-        Log.Info($"Media: clock scan pid={pid} second={second.Count} no stable linear value");
+        Log.Info($"Media: clock scan pid={pid} second={second.Count} rejectedByDuration={rejectedByDuration} - no usable clock");
     }
 
     static int FindMainProcess()
@@ -199,14 +222,17 @@ internal sealed class NetEaseClock : IDisposable
             try
             {
                 // 主进程加载 cloudmusic.dll；辅助进程没有
+                // 真正在放音的进程会加载 MF 媒体引擎；只加载 cloudmusic.dll 的多是渲染/辅助进程
                 bool hasCore = false;
+                bool hasEngine = false;
                 foreach (ProcessModule module in process.Modules)
                 {
-                    if (string.Equals(module.ModuleName, "cloudmusic.dll", StringComparison.OrdinalIgnoreCase))
-                    { hasCore = true; break; }
+                    if (string.Equals(module.ModuleName, "cloudmusic.dll", StringComparison.OrdinalIgnoreCase)) hasCore = true;
+                    else if (string.Equals(module.ModuleName, "MFMediaEngine.dll", StringComparison.OrdinalIgnoreCase)) hasEngine = true;
                 }
                 if (!hasCore) continue;
-                if (process.WorkingSet64 > bestSize) { bestSize = process.WorkingSet64; best = process.Id; }
+                long score = (hasEngine ? 1L << 40 : 0) + process.WorkingSet64;
+                if (score > bestSize) { bestSize = score; best = process.Id; }
             }
             catch (Exception) { }
             finally { process.Dispose(); }

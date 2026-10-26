@@ -19,6 +19,7 @@ internal sealed class MediaWatcher : IDisposable
     readonly PositionTracker _tracker = new();
     readonly NetEaseClock _clock = new();     // 网易云内部播放时钟（内存只读），SMTC 无时间轴时用它
     bool _clockLogged;
+    long _songChangedAtMs;
     double _lastNativeSeconds = -1;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
     GlobalSystemMediaTransportControlsSession? _session;
@@ -322,6 +323,7 @@ internal sealed class MediaWatcher : IDisposable
                 _tracker.Reanchor(resumed ?? TimeSpan.Zero, Environment.TickCount64,
                                   resumed is null ? TimeSpan.Zero : Duration, known);
                 _firstMetadataApplied = true;
+                _songChangedAtMs = Environment.TickCount64;   // 换歌时刻，用于校验新扫到的时钟是否从 0 开始
                 _clock.Invalidate();          // 换歌后内部时钟对象可能重建，重新校准
                 _lastNativeSeconds = -1;
             }
@@ -486,7 +488,14 @@ internal sealed class MediaWatcher : IDisposable
                 && AppId.Contains("cloudmusic", StringComparison.OrdinalIgnoreCase)
                 && PlaybackState is State.Playing or State.Buffering)
             {
-                if (!_clock.IsReady) _clock.EnsureScan();
+                if (!_clock.IsReady)
+                {
+                    // "亲眼看到换歌后的外推值"是可信的独立估计；刚换歌（10 秒内）则以 0 为准
+                    double? expected = null;
+                    if (_songChangedAtMs != 0 && Environment.TickCount64 - _songChangedAtMs < 600_000)
+                        expected = _tracker.Current(Environment.TickCount64).TotalSeconds;
+                    _clock.EnsureScan(expected, Duration > TimeSpan.Zero ? Duration.TotalSeconds : null);
+                }
                 if (_clock.TryGetSeconds(out double nativeSeconds))
                 {
                     // 暂停时网易云会把这个值清零、恢复后接着走，所以只在播放中采信；
@@ -495,6 +504,13 @@ internal sealed class MediaWatcher : IDisposable
                     if (Duration > TimeSpan.Zero && nativeSeconds > Duration.TotalSeconds + 5)
                     {
                         Log.Info($"Media: clock value {nativeSeconds:F1}s exceeds duration {Duration.TotalSeconds:F1}s - rescan");
+                        _clock.Invalidate();
+                        return;
+                    }
+                    long sinceChange = _songChangedAtMs == 0 ? long.MaxValue : Environment.TickCount64 - _songChangedAtMs;
+                                        if (false)
+                    {
+                        Log.Info($"Media: clock value {nativeSeconds:F1}s right after song change - not the position, rescan");
                         _clock.Invalidate();
                         return;
                     }
