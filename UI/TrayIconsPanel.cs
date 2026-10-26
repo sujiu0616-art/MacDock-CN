@@ -2,6 +2,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using MacDock.Core;
@@ -196,6 +197,14 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         };
         view.MouseUp += (_, e) =>
         {
+            // 托盘程序的弹出菜单（微信/Qt 那类）在自己线程里 TrackPopupMenu，
+            // 前提是"这次点击发生在某个前台窗口上"。Explorer 的托盘天生满足（任务栏就是前台），
+            // 我们的菜单栏不是 —— 于是菜单不出现。先把菜单栏设成前台，再把点击转给图标宿主。
+            if (e.ChangedButton is MouseButton.Right or MouseButton.Middle)
+            {
+                var bar = Window.GetWindow(view);
+                if (bar is not null) NativeMethods.SetForegroundWindow(new WindowInteropHelper(bar).Handle);
+            }
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
             e.Handled = true;
         };
