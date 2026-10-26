@@ -68,17 +68,8 @@ internal sealed class MediaWatcher : IDisposable
     {
         get
         {
-            if (_anchorAt == 0) return Position;
-            if (PlaybackState != State.Playing && PlaybackState != State.Buffering) return Position;
-            double driftMs = (Environment.TickCount64 - _anchorAt) * Rate;
-            if (driftMs <= 0) return Position;
-            var projected = Position + TimeSpan.FromMilliseconds(driftMs);
-            if (Duration > TimeSpan.Zero)
-            {
-                var ceiling = Duration > TimeSpan.FromSeconds(2) ? Duration - TimeSpan.FromSeconds(1) : Duration;
-                if (projected > ceiling) return ceiling;
-            }
-            return projected < TimeSpan.Zero ? TimeSpan.Zero : projected;
+            bool advancing = PlaybackState is State.Playing or State.Buffering;
+            return MediaRules.ProjectPosition(Position, _anchorAt, Environment.TickCount64, Rate, Duration, advancing);
         }
     }
 
@@ -127,18 +118,25 @@ internal sealed class MediaWatcher : IDisposable
         try
         {
             var sessions = _manager.GetSessions();
-            GlobalSystemMediaTransportControlsSession? current = null;
-            try { current = _manager.GetCurrentSession(); } catch (Exception) { }
+            if (sessions is null || sessions.Count == 0) return null;
 
-            GlobalSystemMediaTransportControlsSession? playing = null;
-            GlobalSystemMediaTransportControlsSession? anyWithMeta = null;
-            foreach (var candidate in sessions)
+            var snapshots = new MediaRules.SessionSnapshot[sessions.Count];
+            for (int i = 0; i < sessions.Count; i++)
             {
-                var status = SafeStatus(candidate);
-                if (status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing && playing is null) playing = candidate;
-                if (anyWithMeta is null && candidate is not null) anyWithMeta = candidate;
+                var candidate = sessions[i];
+                int status = (int)(SafeStatus(candidate) ?? GlobalSystemMediaTransportControlsSessionPlaybackStatus.Closed);
+                long updated = 0;
+                try
+                {
+                    var timeline = candidate.GetTimelineProperties();
+                    if (timeline is not null) updated = timeline.LastUpdatedTime.ToUnixTimeMilliseconds();
+                }
+                catch (Exception) { }
+                snapshots[i] = new MediaRules.SessionSnapshot(SafeAppId(candidate), status, updated);
             }
-            return playing ?? current ?? anyWithMeta;
+
+            int best = MediaRules.PickBestIndex(snapshots);
+            return best < 0 ? null : sessions[best];
         }
         catch (Exception ex)
         {
@@ -210,16 +208,11 @@ internal sealed class MediaWatcher : IDisposable
 
     /// <summary>SMTC 会话在源进程退出后仍会残留：按 AUMID 里的 exe 名查进程，查不到就当没有会话。</summary>
     static bool IsSourceAlive(string aumid)
-    {
-        if (string.IsNullOrWhiteSpace(aumid)) return true;
-        string name = aumid;
-        int slash = name.LastIndexOfAny(new[] { '\\', '/' });
-        if (slash >= 0 && slash + 1 < name.Length) name = name[(slash + 1)..];
-        if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return true;   // UWP/包名，无法判定就放行
-        string processName = name[..^4];
-        try { return System.Diagnostics.Process.GetProcessesByName(processName).Length > 0; }
-        catch (Exception) { return true; }
-    }
+        => MediaRules.IsSourceAlive(aumid, name =>
+        {
+            try { return System.Diagnostics.Process.GetProcessesByName(name).Length > 0; }
+            catch (Exception) { return true; }
+        });
 
     System.Windows.Threading.DispatcherTimer? _livenessTimer;
 
@@ -376,7 +369,7 @@ internal sealed class MediaWatcher : IDisposable
 
             // 加载中/版权受限时字段可能为空：此时保留上一次的完整元数据，等下一次读取，
             // 避免出现"新歌名 + 旧歌手"这种中间态。
-            if (string.IsNullOrWhiteSpace(title))
+            if (!MediaRules.ShouldApplyMetadata(title))
             {
                 Log.Info("Media: metadata empty (loading / VIP / copyright?), keeping previous");
                 _dispatcher.BeginInvoke(new Action(() => Changed?.Invoke()));
@@ -392,7 +385,7 @@ internal sealed class MediaWatcher : IDisposable
                 _anchorAt = Environment.TickCount64;
                 if (resumed is null) Duration = TimeSpan.Zero;
                 // 亲眼看到换歌 → 位置从 0 开始，可信；有落盘续算也可信；首次拿到元数据（可能已播一半）仍不可信
-                _positionKnown = resumed is not null || _firstMetadataApplied;
+                _positionKnown = MediaRules.IsPositionKnown(_timelineIsReal, resumed is not null, _firstMetadataApplied);
                 _firstMetadataApplied = true;
             }
 
