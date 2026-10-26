@@ -2106,15 +2106,25 @@ internal sealed class DockWindow : Window
 
         else if (_appBar is not null && msg == _appBar.CallbackMessage)
         {
+            // Explorer 是**同步 SendMessage** 过来的：我们在这里花多久，shell 线程就卡多久
+            // （所有窗口都会"无响应"）。所以只记一下、马上返回，重活丢回 Dispatcher。
+            var watch = System.Diagnostics.Stopwatch.StartNew();
             switch ((int)wParam)
             {
                 case ABN_POSCHANGED:
                     SchedulePlace();
                     break;
                 case ABN_FULLSCREENAPP:
-                    OnFullscreenApp(lParam != IntPtr.Zero);
-                    break;
+                    {
+                        bool fullscreen = lParam != IntPtr.Zero;
+                        Dispatcher.BeginInvoke(new Action(() => OnFullscreenApp(fullscreen)),
+                            System.Windows.Threading.DispatcherPriority.Background);
+                        break;
+                    }
             }
+            watch.Stop();
+            if (watch.ElapsedMilliseconds > 100)
+                Log.Info($"WndProc slow: 0x{msg:X} took {watch.ElapsedMilliseconds}ms (Explorer waits on this)");
         }
         return IntPtr.Zero;
     }
