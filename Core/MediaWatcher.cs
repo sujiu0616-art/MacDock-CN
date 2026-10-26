@@ -29,6 +29,37 @@ internal sealed class MediaWatcher : IDisposable
     public BitmapSource? Art { get; private set; }
     public bool HasSession => _session is not null;
 
+    // ── 进度（SMTC 时间轴，事件驱动）─────────────────────────────────────
+    public TimeSpan Position { get; private set; }
+    public TimeSpan Duration { get; private set; }
+    long _positionReadAt;
+
+    /// <summary>按 SMTC 时间轴推算当前位置（读一次时间轴 + 本地时钟外推，不轮询系统）。</summary>
+    public TimeSpan CurrentPosition
+    {
+        get
+        {
+            if (!IsPlaying) return Position;
+            var drift = Environment.TickCount64 - _positionReadAt;
+            if (drift <= 0) return Position;
+            var projected = Position + TimeSpan.FromMilliseconds(drift);
+            return Duration > TimeSpan.Zero && projected > Duration ? Duration : projected;
+        }
+    }
+
+    void ReadTimeline()
+    {
+        try
+        {
+            var timeline = _session?.GetTimelineProperties();
+            if (timeline is null) return;
+            Position = timeline.Position;
+            Duration = timeline.EndTime - timeline.StartTime;
+            _positionReadAt = Environment.TickCount64;
+        }
+        catch (Exception) { }
+    }
+
     public async void Start()
     {
         try
@@ -63,6 +94,8 @@ internal sealed class MediaWatcher : IDisposable
             AppId = _session.SourceAppUserModelId ?? "";
             _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
             _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
+            _session.TimelinePropertiesChanged += OnTimelinePropertiesChanged;
+            ReadTimeline();
             ReadPlaybackState();
             _ = ReadMediaPropertiesAsync();
         }
@@ -79,17 +112,24 @@ internal sealed class MediaWatcher : IDisposable
         {
             _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
             _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
+            _session.TimelinePropertiesChanged -= OnTimelinePropertiesChanged;
         }
         catch (Exception) { }
         _session = null;
     }
 
     void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, object args) => _ = ReadMediaPropertiesAsync();
+    void OnTimelinePropertiesChanged(GlobalSystemMediaTransportControlsSession sender, object args)
+{
+    ReadTimeline();
+}
     void OnPlaybackInfoChanged(GlobalSystemMediaTransportControlsSession sender, object args)
     {
         ReadPlaybackState();
         Changed?.Invoke();
     }
+
+    internal void RefreshTimeline() => ReadTimeline();
 
     void ReadPlaybackState()
     {

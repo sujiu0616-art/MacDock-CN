@@ -48,6 +48,7 @@ internal sealed class MenuBarWindow : Window
     // ── 灵动岛（媒体胶囊）────────────────────────────────────────────────
     Border? _capsule;
     TextBlock? _capsuleText;
+    TextBlock? _capsuleIcon;
     MediaWatcher? _media;
 
     void EnsureMediaWatcher()
@@ -68,13 +69,13 @@ internal sealed class MenuBarWindow : Window
     {
         if (_capsuleText is null || _media is null) return;
         bool playing = _media.HasSession && !string.IsNullOrWhiteSpace(_media.Title);
-        _capsuleText.Text = playing
-            ? (_media.IsPlaying ? "\uE769  " : "\uE768  ") + _media.Title
-            : "";
+        _capsuleText.Text = playing ? _media.Title : "";
+        if (_capsuleIcon is not null)
+            _capsuleIcon.Opacity = playing ? 1.0 : 0.45;
         if (_capsule is not null)
         {
             _capsule.Visibility = Visibility.Visible;   // 空闲时也在，用户点得到
-            _capsule.Width = playing ? 150 : 44;        // 没在播放就是个小胶囊
+            _capsule.Width = playing ? 158 : 44;        // 没在播放就是个小胶囊
         }
     }
 
@@ -95,6 +96,7 @@ internal sealed class MenuBarWindow : Window
 
     void ToggleIsland()
     {
+        Log.Info($"IslandDiag: capsule clicked, open={IslandWindow.IsOpen}");
         EnsureMediaWatcher();
         if (IslandWindow.IsOpen) { IslandWindow.HideIsland(); return; }
         IslandWindow.ShowCentered(_hwnd, _media!);
@@ -215,7 +217,24 @@ internal sealed class MenuBarWindow : Window
         };
         _capsule = new Border
         {
-            Child = _capsuleText,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Children =
+                {
+                    (_capsuleIcon = new TextBlock
+                    {
+                        Text = "●",   // 几何圆点：♪ 在 Segoe UI Variable 里没有字形，会渲染成方块
+                        FontFamily = Typo.Ui,
+                        FontSize = 8,
+                        Margin = new Thickness(0, 0, 5, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    }),
+                    _capsuleText,
+                },
+            },
             Width = 92,
             Height = 26,
             CornerRadius = new CornerRadius(13),
@@ -227,6 +246,7 @@ internal sealed class MenuBarWindow : Window
             BorderBrush = Brushes.Transparent,
         };
         _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
+        _capsule.MouseDown += (_, _) => Log.Info("IslandDiag: capsule mouse down");
         _capsule.MouseEnter += (_, _) => UpdateCapsuleLook(hover: true);
         _capsule.MouseLeave += (_, _) => UpdateCapsuleLook(hover: false);
         _root.Children.Add(_capsule);

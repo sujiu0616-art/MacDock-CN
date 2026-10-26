@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using MacDock.Core;
 
@@ -12,10 +11,11 @@ namespace MacDock.UI;
 /// 灵动岛：菜单栏正中的小胶囊 + 展开后的媒体卡片。
 ///
 /// 性能约束（用户要求"不能影响大型游戏"）：
-/// · 收起状态只是一个 88×26 的圆角 Border，没有任何动画/计时器；
-/// · 展开体是**独立的分层窗口**（和 PopMenu 一样），不改菜单栏窗口尺寸（那是 appbar，改尺寸会惊动 Explorer）；
-/// · 动画只做 120ms 的尺寸/圆角，元素很小；
-/// · 媒体信息由 <see cref="MediaWatcher"/> 事件驱动，空闲零轮询。
+/// · 收起状态只是一个圆角 Border，无动画、无计时器、无网络；
+/// · 展开体是**独立的分层窗口**，不改菜单栏尺寸（菜单栏是 appbar，改尺寸会惊动 Explorer）；
+/// · 媒体/进度/歌词全部"只在卡片展开时"才刷新：300ms 的 UI 计时器 + 本地推算，
+///   不读系统、不轮询进程；关闭卡片后计时器停止，零开销；
+/// · 歌词只在换歌时联网一次，之后落盘缓存。
 /// </summary>
 internal sealed class IslandWindow : Window
 {
@@ -26,14 +26,30 @@ internal sealed class IslandWindow : Window
     readonly TextBlock _title;
     readonly TextBlock _artist;
     readonly TextBlock _empty;
-    readonly Grid _buttons;
-    readonly TextBlock _playGlyph;
+    readonly TextBlock _lyric;
+    readonly TextBlock _elapsed;
+    readonly TextBlock _total;
+    readonly Border _progressTrack;
+    readonly Border _progressFill;
+    readonly Grid _mediaGrid;
+    readonly ButtonRow _buttons;
+    readonly System.Windows.Threading.DispatcherTimer _leaveTimer;
+    readonly System.Windows.Threading.DispatcherTimer _ticker;
+
     MediaWatcher? _media;
     IntPtr _ownerHandle;
-    readonly System.Windows.Threading.DispatcherTimer _leaveTimer =
-        new() { Interval = TimeSpan.FromMilliseconds(350) };
+    LyricsService.Lyrics? _lyrics;
+    string _lyricsKey = "";
+    bool _fetchingLyrics;
+    bool _pointerInside;
 
     public static bool IsOpen => _open is not null;
+
+    /// <summary>三个控制按钮横向排开（之前用 Grid 没加列定义，三个按钮挤在同一格里）。</summary>
+    sealed class ButtonRow : StackPanel
+    {
+        public ButtonRow() { Orientation = Orientation.Horizontal; }
+    }
 
     public IslandWindow()
     {
@@ -50,7 +66,9 @@ internal sealed class IslandWindow : Window
         Height = 10;
         Left = -32000;
         Top = -32000;
+        Cursor = Cursors.Arrow;
 
+        // ── 封面 ───────────────────────────────────────────────────────────
         _art = new Image { Width = 52, Height = 52, Stretch = Stretch.UniformToFill };
         RenderOptions.SetBitmapScalingMode(_art, BitmapScalingMode.HighQuality);
         var artFrame = new Border
@@ -59,56 +77,87 @@ internal sealed class IslandWindow : Window
             Width = 52,
             Height = 52,
             CornerRadius = new CornerRadius(11),
-            Background = Frozen(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF)),
+            Background = Frozen(Color.FromArgb(0x2A, 0xFF, 0xFF, 0xFF)),
             ClipToBounds = true,
             VerticalAlignment = VerticalAlignment.Center,
         };
 
-        _title = Text("", 13, FontWeights.SemiBold);
-        _artist = Text("", 11, FontWeights.Normal);
-        _title.MaxWidth = 152;      // 卡片里给右侧按钮留位置
-        _artist.MaxWidth = 152;
-        _title.TextTrimming = TextTrimming.CharacterEllipsis;
-        _artist.TextTrimming = TextTrimming.CharacterEllipsis;
+        // ── 文字 ───────────────────────────────────────────────────────────
+        _title = MakeText("", 13, FontWeights.SemiBold, 168);
+        _artist = MakeText("", 11, FontWeights.Normal, 168);
+        _lyric = MakeText("", 11.5, FontWeights.Normal, 236);
+        _lyric.Margin = new Thickness(0, 6, 0, 0);
+        _lyric.Opacity = 0.85;
+
         var textColumn = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 6, 0) };
         textColumn.Children.Add(_title);
         textColumn.Children.Add(_artist);
 
-        _playGlyph = Text("\uE768", 15, FontWeights.Normal);
-        _playGlyph.FontFamily = Typo.Icons;
-        var prev = GlyphButton("\uE892", () => _media?.Previous());
-        var play = GlyphButton("\uE768", () => _media?.PlayPause());
-        var next = GlyphButton("\uE893", () => _media?.Next());
-        _playGlyph = (TextBlock)((Border)play).Child;
-        _buttons = new Grid { VerticalAlignment = VerticalAlignment.Center };
-        _buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        _buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        _buttons.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        Grid.SetColumn((UIElement)prev, 0);
-        Grid.SetColumn((UIElement)play, 1);
-        Grid.SetColumn((UIElement)next, 2);
-        _buttons.Children.Add((UIElement)prev);
-        _buttons.Children.Add((UIElement)play);
-        _buttons.Children.Add((UIElement)next);
+        var header = new StackPanel { Orientation = Orientation.Horizontal };
+        header.Children.Add(artFrame);
+        header.Children.Add(textColumn);
 
-        _empty = Text("没有正在播放的媒体", 12, FontWeights.Normal);
-        _empty.VerticalAlignment = VerticalAlignment.Center;
-        _empty.Margin = new Thickness(10, 0, 0, 0);
+        // ── 按钮 ───────────────────────────────────────────────────────────
+        _buttons = new ButtonRow { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        var prev = GlyphButton("M11,1 L2.6,6 L11,11 Z M0.4,1 L1.8,1 L1.8,11 L0.4,11 Z", () => _media?.Previous());
+        var play = GlyphButton(PlayGeometry, () => _media?.PlayPause());
+        var next = GlyphButton("M1,1 L9.4,6 L1,11 Z M10.2,1 L11.6,1 L11.6,11 L10.2,11 Z", () => _media?.Next());
+        _buttons.Children.Add(prev);
+        _buttons.Children.Add(play);
+        _buttons.Children.Add(next);
+        _playGlyph = (System.Windows.Shapes.Path)((Border)play).Child;
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(artFrame);
-        row.Children.Add(textColumn);
-
-        var grid = new Grid();
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.Children.Add(row);
-        grid.Children.Add(_buttons);
+        var top = new Grid();
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.Children.Add(header);
+        top.Children.Add(_buttons);
         Grid.SetColumn(_buttons, 1);
+
+        // ── 进度 ───────────────────────────────────────────────────────────
+        _progressTrack = new Border
+        {
+            Height = 3,
+            CornerRadius = new CornerRadius(1.5),
+            Background = Frozen(Color.FromArgb(0x3A, 0xFF, 0xFF, 0xFF)),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _progressFill = new Border
+        {
+            Height = 3,
+            CornerRadius = new CornerRadius(1.5),
+            Background = Frozen(Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF)),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Width = 0,
+        };
+        var progressHost = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        progressHost.Children.Add(_progressTrack);
+        progressHost.Children.Add(_progressFill);
+
+        _elapsed = MakeText("0:00", 10, FontWeights.Normal, 60);
+        _total = MakeText("0:00", 10, FontWeights.Normal, 60);
+        _total.HorizontalAlignment = HorizontalAlignment.Right;
+        var times = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+        times.Children.Add(_elapsed);
+        times.Children.Add(_total);
+
+        // ── 组合 ───────────────────────────────────────────────────────────
+        var stack = new StackPanel();
+        stack.Children.Add(top);
+        stack.Children.Add(_lyric);
+        stack.Children.Add(progressHost);
+        stack.Children.Add(times);
+        _progressTrack.SizeChanged += (_, _) => UpdateProgressAndLyric();
+        _mediaGrid = new Grid();
+        _mediaGrid.Children.Add(stack);
+
+        _empty = MakeText("没有正在播放的媒体", 12, FontWeights.Normal, 260);
+        _empty.VerticalAlignment = VerticalAlignment.Center;
+        _empty.Margin = new Thickness(12, 0, 0, 0);
 
         var content = new Grid();
         content.Children.Add(_empty);
-        content.Children.Add(grid);
+        content.Children.Add(_mediaGrid);
 
         _card = new Border
         {
@@ -119,29 +168,51 @@ internal sealed class IslandWindow : Window
         };
         Content = _card;
         ApplyTheme();
-        SourceInitialized += (_, _) => { };
-        MouseLeave += (_, _) =>
-        {
-            // 给一点余地：从胶囊移到卡片上时不会立刻关掉
-            _leaveTimer.Stop();
-            _leaveTimer.Start();
-        };
+
+        _leaveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _leaveTimer.Tick += (_, _) => { _leaveTimer.Stop(); HideIsland(); };
+
+        // 只在卡片展开时跑：300ms 更新进度条与当前歌词（纯本地计算）
+        _ticker = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _ticker.Tick += (_, _) => UpdateProgressAndLyric();
+
         MouseEnter += (_, _) => _leaveTimer.Stop();
+        MouseLeave += (_, _) => { _leaveTimer.Stop(); _leaveTimer.Start(); };
     }
 
-    TextBlock Text(string text, double size, FontWeight weight)
+    System.Windows.Shapes.Path _playGlyph = null!;
+
+    static TextBlock MakeText(string text, double size, FontWeight weight, double maxWidth)
     {
-        var t = new TextBlock { Text = text, FontFamily = Typo.Ui, FontSize = size, FontWeight = weight, TextTrimming = TextTrimming.CharacterEllipsis };
+        var t = new TextBlock
+        {
+            Text = text,
+            FontFamily = Typo.Ui,
+            FontSize = size,
+            FontWeight = weight,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = maxWidth,
+        };
         TextOptions.SetTextFormattingMode(t, TextFormattingMode.Display);
         return t;
     }
 
-    UIElement GlyphButton(string glyph, Action action)
+    internal const string PlayGeometry = "M1,0 L11,6 L1,12 Z";
+    internal const string PauseGeometry = "M0.8,0 L4,0 L4,12 L0.8,12 Z M7,0 L10.2,0 L10.2,12 L7,12 Z";
+
+    UIElement GlyphButton(string geometry, Action action)
     {
-        var text = Text(glyph, 15, FontWeights.Normal);
-        text.FontFamily = Typo.Icons;
-        text.HorizontalAlignment = HorizontalAlignment.Center;
-        text.VerticalAlignment = VerticalAlignment.Center;
+        var text = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse(geometry),
+            Fill = Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF)),
+            Width = 13,
+            Height = 13,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            SnapsToDevicePixels = true,
+        };
         var border = new Border
         {
             Child = text,
@@ -152,21 +223,23 @@ internal sealed class IslandWindow : Window
             Cursor = Cursors.Hand,
         };
         border.MouseLeftButtonUp += (_, e) => { action(); e.Handled = true; };
-        border.MouseEnter += (_, _) => border.Background = Frozen(Theme.IsDark ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x18, 0x00, 0x00, 0x00));
+        border.MouseEnter += (_, _) => border.Background = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
         border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
         return border;
     }
 
     void ApplyTheme()
     {
-        // 固定深色玻璃：和菜单栏的材质保持一致（系统浅色时也这样，否则两种材质挨在一起很割裂）
-        bool dark = true;
+        // 固定深色玻璃，和菜单栏同材质
         _card.Background = Frozen(Color.FromArgb(0xF0, 0x1E, 0x20, 0x26));
-        _card.BorderBrush = Frozen(dark ? Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
-        _title.Foreground = Frozen(dark ? Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF5) : Color.FromArgb(0xFF, 0x1D, 0x1D, 0x20));
-        _artist.Foreground = Frozen(dark ? Color.FromArgb(0xB0, 0xE8, 0xE8, 0xEE) : Color.FromArgb(0xA0, 0x3A, 0x3A, 0x40));
+        _card.BorderBrush = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
+        _title.Foreground = Frozen(Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF5));
+        _artist.Foreground = Frozen(Color.FromArgb(0xB0, 0xE8, 0xE8, 0xEE));
+        _lyric.Foreground = Frozen(Color.FromArgb(0xE0, 0xFF, 0xFF, 0xFF));
+        _elapsed.Foreground = _artist.Foreground;
+        _total.Foreground = _artist.Foreground;
         _empty.Foreground = _artist.Foreground;
-        _playGlyph.Foreground = _title.Foreground;
+        _playGlyph.Fill = _title.Foreground;
     }
 
     static Brush Frozen(Color c)
@@ -179,24 +252,34 @@ internal sealed class IslandWindow : Window
     /// <summary>在菜单栏正中下方展开（owner 为菜单栏窗口句柄）。</summary>
     public static void ShowCentered(IntPtr owner, MediaWatcher media)
     {
-        var island = _open;
-        if (island is null)
+        try
         {
-            island = new IslandWindow { _ownerHandle = owner };
-            _open = island;
-            island.Show();
+            var island = _open;
+            if (island is null)
+            {
+                island = new IslandWindow { _ownerHandle = owner };
+                island.Show();
+                _open = island;
+            }
+            island._media = media;
+            island.ApplyTheme();
+            island.PositionUnderMenuBar(owner);
+            island.Refresh();
+            island._ticker.Start();
         }
-        island._media = media;
-        island.ApplyTheme();
-        island.PositionUnderMenuBar(owner);
-        island.Refresh();
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Showing the island");
+        }
     }
-
     public static void HideIsland()
     {
         var island = _open;
         _open = null;
-        island?.Close();
+        if (island is null) return;
+        island._ticker.Stop();          // 收起即停，零开销
+        island._leaveTimer.Stop();
+        island.Close();
     }
 
     void PositionUnderMenuBar(IntPtr owner)
@@ -206,11 +289,11 @@ internal sealed class IslandWindow : Window
             var display = Displays.ByNameOrPrimary(null);
             double scale = display.Scale <= 0 ? 1 : display.Scale;
             var screen = display.Bounds;
-            Width = 320;
-            Height = 96;
+            Width = 344;
+            Height = 152;
             Left = (screen.Width / scale - Width) / 2 + screen.Left / scale;
-            Top = (screen.Top / scale) + (48 / scale);   // 菜单栏高 48px
-            Activate();
+            Top = screen.Top / scale + 48 / scale;   // 菜单栏高 48px
+            // 注意：不调用 Activate() —— 不能把焦点从游戏/应用手里抢走
         }
         catch (Exception ex)
         {
@@ -218,21 +301,71 @@ internal sealed class IslandWindow : Window
         }
     }
 
-    /// <summary>按媒体状态刷新卡片（事件驱动调用，不轮询）。</summary>
+    /// <summary>按媒体状态刷新卡片（事件驱动调用）。</summary>
     public void Refresh()
     {
         var media = _media;
         bool has = media is not null && media.HasSession && !string.IsNullOrWhiteSpace(media.Title);
         _empty.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
-        _buttons.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
-        _art.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
-        _title.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
-        _artist.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
-
+        _mediaGrid.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
         if (!has) return;
+
         _title.Text = media!.Title;
         _artist.Text = media.Artist;
         _art.Source = media.Art;
-        _playGlyph.Text = media.IsPlaying ? "\uE769" : "\uE768";   // pause / play
+        _art.Visibility = media.Art is null ? Visibility.Hidden : Visibility.Visible;
+        _playGlyph.Data = Geometry.Parse(media.IsPlaying ? PauseGeometry : PlayGeometry);
+        UpdateProgressAndLyric();
+        StartLyricsFetch(media.Title, media.Artist);
     }
+
+    void StartLyricsFetch(string title, string artist)
+    {
+        string key = title + "|" + artist;
+        if (_lyricsKey == key) return;
+        _lyricsKey = key;
+        _lyrics = null;
+        _lyric.Text = "";
+        if (_fetchingLyrics) return;
+        _fetchingLyrics = true;
+        _ = Task.Run(async () =>
+        {
+            var lyrics = await LyricsService.GetAsync(title, artist);
+            _fetchingLyrics = false;
+            if (lyrics is null) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_lyricsKey != key) return;   // 期间又换歌了
+                _lyrics = lyrics;
+                UpdateProgressAndLyric();
+            }));
+        });
+    }
+
+    void UpdateProgressAndLyric()
+    {
+        var media = _media;
+        if (media is null || !media.HasSession) return;
+
+        var position = media.CurrentPosition;
+        var duration = media.Duration;
+        if (duration > TimeSpan.Zero)
+        {
+            double ratio = Math.Clamp(position.TotalMilliseconds / duration.TotalMilliseconds, 0, 1);
+            _progressFill.Width = Math.Max(0, _progressTrack.ActualWidth > 0 ? _progressTrack.ActualWidth * ratio : 0);
+            _total.Text = Format(duration);
+        }
+        else
+        {
+            _progressFill.Width = 0;
+            _total.Text = "--:--";
+        }
+        _elapsed.Text = Format(position);
+
+        _lyric.Text = _lyrics?.LineAt(position) ?? "";
+    }
+
+    static string Format(TimeSpan value) => value.TotalHours >= 1
+        ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
+        : $"{value.Minutes}:{value.Seconds:00}";
 }
