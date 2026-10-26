@@ -160,7 +160,12 @@ internal sealed class MediaWatcher : IDisposable
             int sessionCount = 0;
             try { sessionCount = _manager?.GetSessions()?.Count ?? 0; } catch (Exception) { }
             var best = PickSession();
-            Log.Info($"Media: sessions={sessionCount} picked={(best is null ? "none" : SafeAppId(best))}");
+            string logKey = sessionCount + ":" + (best is null ? "none" : SafeAppId(best));
+            if (logKey != _lastSessionLog)
+            {
+                _lastSessionLog = logKey;
+                Log.Info($"Media: sessions={sessionCount} picked={(best is null ? "none" : SafeAppId(best))}");
+            }
             if (ReferenceEquals(best, _session)) { Refresh(); return; }
 
             Detach();
@@ -355,6 +360,7 @@ internal sealed class MediaWatcher : IDisposable
     // ── 读取：元数据（整体替换 + 封面缓存）─────────────────────────────
     string _metadataKey = "";
     string loggedKey = "";
+    string _lastSessionLog = "";
     bool _sawSongChange;
     bool _firstMetadataApplied;
 
