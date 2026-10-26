@@ -41,6 +41,7 @@ internal sealed class IslandWindow : Window
     LyricsService.Lyrics? _lyrics;
     string _lyricsKey = "";
     bool _fetchingLyrics;
+    int _lyricOffsetMs;
     bool _pointerInside;
 
     public static bool IsOpen => _open is not null;
@@ -166,6 +167,7 @@ internal sealed class IslandWindow : Window
             CornerRadius = new CornerRadius(20),
             BorderThickness = new Thickness(1),
         };
+        _lyricOffsetMs = DockConfig.LyricOffsetMs;
         Content = _card;
         ApplyTheme();
 
@@ -330,13 +332,14 @@ internal sealed class IslandWindow : Window
         _fetchingLyrics = true;
         _ = Task.Run(async () =>
         {
-            var lyrics = await LyricsService.GetAsync(title, artist);
+            var info = await LyricsService.GetAsync(title, artist);
             _fetchingLyrics = false;
-            if (lyrics is null) return;
+            if (info is null) return;
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (_lyricsKey != key) return;   // 期间又换歌了
-                _lyrics = lyrics;
+                _lyrics = info.Lyrics;
+                _media?.SetKnownDuration(info.Duration);   // 网易云 SMTC 不报时长，用元数据里的准确值
                 UpdateProgressAndLyric();
             }));
         });
@@ -347,6 +350,7 @@ internal sealed class IslandWindow : Window
         var media = _media;
         if (media is null || !media.HasSession) return;
 
+        media.RefreshTimeline();   // 读一次缓存的时间轴：应用若哪天开始报真实位置，这里就会自动用上
         var position = media.CurrentPosition;
         var duration = media.Duration;
         if (duration > TimeSpan.Zero)
@@ -362,7 +366,9 @@ internal sealed class IslandWindow : Window
         }
         _elapsed.Text = Format(position);
 
-        _lyric.Text = _lyrics?.LineAt(position) ?? "";
+        // 歌词行：位置 + 用户偏移（网易云不报位置，残留误差靠配置里的 LyricOffsetMs 修）
+        var lyricPosition = position + TimeSpan.FromMilliseconds(_lyricOffsetMs);
+        _lyric.Text = _lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "";
     }
 
     static string Format(TimeSpan value) => value.TotalHours >= 1

@@ -25,6 +25,12 @@ internal sealed class DockSettings
     /// </summary>
     public bool SafeMode { get; set; }
 
+    /// <summary>
+    /// 歌词对齐偏移（毫秒）。网易云不对外报播放位置（SMTC 恒为 0），我们只能本地推算，
+    /// 残留误差用这个值修：歌词偏慢就填负数（如 -1200），偏快就填正数。
+    /// </summary>
+    public int LyricOffsetMs { get; set; }
+
     /// <summary>Shows / hides the Windows taskbar again while the dock replaces it.</summary>
     public string TaskbarHotkey { get; set; } = "Ctrl+Alt+Shift+B";
 
@@ -93,6 +99,9 @@ internal sealed class DockConfig
 
     /// <summary>当前生效的安全模式（由 Dock 启动时写入，WindowActions 等无实例的地方读它）。</summary>
     public static bool SafeMode { get; set; }
+
+    /// <summary>歌词对齐偏移（毫秒），由 Dock 启动时从配置写入，供 IslandWindow 使用。</summary>
+    public static int LyricOffsetMs { get; set; }
 
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MacDock");

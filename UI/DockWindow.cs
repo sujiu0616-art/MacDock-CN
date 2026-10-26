@@ -369,6 +369,7 @@ internal sealed class DockWindow : Window
         StartTrashWatch();
 
         DockConfig.SafeMode = _config.Settings.SafeMode;
+        DockConfig.LyricOffsetMs = _config.Settings.LyricOffsetMs;
         // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
         // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
         if (_config.Settings.LaunchpadKey != 0)
@@ -1945,6 +1946,7 @@ internal sealed class DockWindow : Window
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
         DockConfig.SafeMode = _config.Settings.SafeMode;
+        DockConfig.LyricOffsetMs = _config.Settings.LyricOffsetMs;
         // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
         // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
         if (_config.Settings.LaunchpadKey != 0)

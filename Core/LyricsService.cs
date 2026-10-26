@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -6,18 +5,19 @@ using System.Text.Json;
 namespace MacDock.Core;
 
 /// <summary>
-/// 歌词：从网易云音乐的公开接口取（搜索拿 id → 歌词接口拿 LRC），按"歌名 + 歌手"缓存。
+/// 歌曲元数据：歌词（逐行 LRC）+ 准确时长。
 ///
-/// 为什么走公开接口而不是逆向客户端：
-/// 客户端歌词渲染在它自己的 CEF 窗口（OrpheusBrowserHost）里，要取出来得挂进去改它的进程；
-/// 公开接口同样拿得到逐行 LRC（含翻译），而且只读、无登录、失败无副作用。
+/// 为什么走网易云公开接口而不是逆向客户端：
+/// 客户端把歌词渲染在自己的 CEF 窗口（OrpheusBrowserHost）里，取出来要注入它的进程；
+/// 而它注册的 SMTC 时间轴**恒为 0**（实测 start=end=pos=00:00:00），时长也只能从接口拿。
+/// 公开接口只读、无登录，失败无副作用。
 ///
-/// 网络只在**换歌时**发生一次，之后落盘缓存，播放过程中零请求。
+/// 网络只在**换歌时**发生一次（搜索 → 歌词 + 详情），之后落盘缓存，播放过程中零请求。
 /// </summary>
 internal static class LyricsService
 {
     static readonly HttpClient Http = CreateClient();
-    static readonly Dictionary<string, Lyrics?> Cache = new(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, SongInfo?> Cache = new(StringComparer.OrdinalIgnoreCase);
     static readonly object Gate = new();
 
     static HttpClient CreateClient()
@@ -27,6 +27,13 @@ internal static class LyricsService
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
         client.DefaultRequestHeaders.Referrer = new Uri("https://music.163.com/");
         return client;
+    }
+
+    /// <summary>一首歌的歌词 + 准确时长（Duration 为 0 表示没取到）。</summary>
+    internal sealed class SongInfo
+    {
+        public Lyrics? Lyrics { get; init; }
+        public TimeSpan Duration { get; init; }
     }
 
     internal sealed class Lyrics
@@ -47,32 +54,41 @@ internal static class LyricsService
         }
     }
 
-    /// <summary>取歌词（命中缓存就不发请求）。失败返回 null，不抛。</summary>
-    public static async Task<Lyrics?> GetAsync(string title, string artist)
+    /// <summary>取歌词与时长（命中缓存就不发请求）。失败返回 null，不抛。</summary>
+    public static async Task<SongInfo?> GetAsync(string title, string artist)
     {
         if (string.IsNullOrWhiteSpace(title)) return null;
         string key = title.Trim() + "|" + artist.Trim();
         lock (Gate) if (Cache.TryGetValue(key, out var cached)) return cached;
 
-        Lyrics? result = null;
+        SongInfo? info = null;
         try
         {
-            var file = Path.Combine(DockConfig.Folder, "lyrics", Sanitize(key) + ".lrc");
-            if (File.Exists(file))
+            var folder = Path.Combine(DockConfig.Folder, "lyrics");
+            var lrcFile = Path.Combine(folder, Sanitize(key) + ".lrc");
+            var metaFile = Path.Combine(folder, Sanitize(key) + ".meta");
+
+            if (File.Exists(lrcFile) && File.Exists(metaFile))
             {
-                result = Parse(await File.ReadAllTextAsync(file));
+                long ticks = 0;
+                _ = long.TryParse((await File.ReadAllTextAsync(metaFile)).Trim(), out ticks);
+                var cachedLyrics = Parse(await File.ReadAllTextAsync(lrcFile));
+                info = new SongInfo { Lyrics = cachedLyrics, Duration = TimeSpan.FromTicks(Math.Max(0, ticks)) };
             }
             else
             {
                 long id = await SearchSongIdAsync(title, artist);
                 if (id > 0)
                 {
-                    string lrc = await GetLyricAsync(id);
-                    result = Parse(lrc);
-                    if (result.Lines.Count > 0)
+                    var (lrcText, duration) = await FetchLyricAndDurationAsync(id);
+                    var lyrics = Parse(lrcText);
+                    info = new SongInfo { Lyrics = lyrics, Duration = duration };
+
+                    if (lyrics.Lines.Count > 0 || duration > TimeSpan.Zero)
                     {
-                        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                        await File.WriteAllTextAsync(file, lrc);
+                        Directory.CreateDirectory(folder);
+                        if (lyrics.Lines.Count > 0) await File.WriteAllTextAsync(lrcFile, lrcText);
+                        await File.WriteAllTextAsync(metaFile, duration.Ticks.ToString());
                     }
                 }
             }
@@ -82,8 +98,8 @@ internal static class LyricsService
             Log.Error(ex, "Fetching lyrics");
         }
 
-        lock (Gate) Cache[key] = result;
-        return result;
+        lock (Gate) Cache[key] = info;
+        return info;
     }
 
     static async Task<long> SearchSongIdAsync(string title, string artist)
@@ -117,14 +133,34 @@ internal static class LyricsService
         return fallback;
     }
 
-    static async Task<string> GetLyricAsync(long id)
+    static async Task<(string Lyric, TimeSpan Duration)> FetchLyricAndDurationAsync(long id)
     {
-        using var response = await Http.GetAsync($"https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1");
-        if (!response.IsSuccessStatusCode) return "";
-        string text = await response.Content.ReadAsStringAsync();
-        using var json = JsonDocument.Parse(text);
-        if (!json.RootElement.TryGetProperty("lrc", out var lrc)) return "";
-        return lrc.TryGetProperty("lyric", out var lyric) ? lyric.GetString() ?? "" : "";
+        string lrcText = "";
+        using (var response = await Http.GetAsync($"https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1"))
+        {
+            if (response.IsSuccessStatusCode)
+            {
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                if (json.RootElement.TryGetProperty("lrc", out var lrc) && lrc.TryGetProperty("lyric", out var lyric))
+                    lrcText = lyric.GetString() ?? "";
+            }
+        }
+
+        TimeSpan duration = TimeSpan.Zero;
+        try
+        {
+            using var detail = await Http.GetAsync($"https://music.163.com/api/song/detail?ids=[{id}]");
+            if (detail.IsSuccessStatusCode)
+            {
+                using var detailJson = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
+                if (detailJson.RootElement.TryGetProperty("songs", out var songs) && songs.GetArrayLength() > 0
+                    && songs[0].TryGetProperty("duration", out var ms) && ms.TryGetInt64(out long millis) && millis > 0)
+                    duration = TimeSpan.FromMilliseconds(millis);
+            }
+        }
+        catch (Exception) { }
+
+        return (lrcText, duration);
     }
 
     static Lyrics Parse(string lrc)
@@ -138,7 +174,6 @@ internal static class LyricsService
             int close = line.IndexOf(']');
             if (close < 0) continue;
             string stamp = line[1..close];
-            // 逐行时间戳可能一行多个，这里只取第一个
             string[] parts = stamp.Split(':', '.');
             if (parts.Length < 3) continue;
             if (!int.TryParse(parts[0], out int minutes)) continue;
@@ -146,13 +181,14 @@ internal static class LyricsService
             if (!int.TryParse(parts[2].PadRight(3, '0')[..3], out int millis)) continue;
             string text = line[(close + 1)..].Trim();
             if (text.Length == 0) continue;
+            if (IsMetadataLine(text)) continue;   // 作词/作曲/音乐发行 这些不是歌词
             lyrics.Lines.Add((new TimeSpan(0, 0, minutes, seconds, millis), text));
         }
         lyrics.Lines.Sort((a, b) => a.At.CompareTo(b.At));
         return lyrics;
     }
 
-    /// <summary>过滤 LRC 头部的制作人员信息行（它们带时间戳但会占满卡片的那一行）。</summary>
+    /// <summary>过滤 LRC 头部的制作人员信息行（它们带时间戳但会占满卡片那一行）。</summary>
     static bool IsMetadataLine(string text)
     {
         ReadOnlySpan<string> prefixes = new[]

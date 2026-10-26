@@ -33,14 +33,16 @@ internal sealed class MediaWatcher : IDisposable
     public TimeSpan Position { get; private set; }
     public TimeSpan Duration { get; private set; }
     long _positionReadAt;
+    long _anchorAt;
 
     /// <summary>按 SMTC 时间轴推算当前位置（读一次时间轴 + 本地时钟外推，不轮询系统）。</summary>
+    /// <summary>播放位置：SMTC 有真实时间轴时用 SMTC；网易云这类全 0 的用本地锚点推算。</summary>
     public TimeSpan CurrentPosition
     {
         get
         {
-            if (!IsPlaying) return Position;
-            var drift = Environment.TickCount64 - _positionReadAt;
+            if (!IsPlaying || _anchorAt == 0) return Position;
+            var drift = Environment.TickCount64 - _anchorAt;
             if (drift <= 0) return Position;
             var projected = Position + TimeSpan.FromMilliseconds(drift);
             return Duration > TimeSpan.Zero && projected > Duration ? Duration : projected;
@@ -53,9 +55,20 @@ internal sealed class MediaWatcher : IDisposable
         {
             var timeline = _session?.GetTimelineProperties();
             if (timeline is null) return;
+            // 网易云音乐报告 start=end=pos=00:00:00（实测），这时不能把进度归零，
+            // 改用"锚点 + 播放状态"推算：每次播放/暂停切换时把当前推算值锚定下来。
+            bool zeroTimeline = timeline.EndTime <= TimeSpan.Zero && timeline.Position <= TimeSpan.Zero;
+            if (zeroTimeline)
+            {
+                if (_anchorAt == 0) { _anchorAt = Environment.TickCount64; }
+                _positionReadAt = Environment.TickCount64;
+                return;
+            }
             Position = timeline.Position;
+            _anchorAt = Environment.TickCount64;
             Duration = timeline.EndTime - timeline.StartTime;
             _positionReadAt = Environment.TickCount64;
+            Log.Info($"TimelineDiag: start={timeline.StartTime} end={timeline.EndTime} pos={timeline.Position} maxSeek={timeline.MaxSeekTime} minSeek={timeline.MinSeekTime}");
         }
         catch (Exception) { }
     }
@@ -131,10 +144,20 @@ internal sealed class MediaWatcher : IDisposable
 
     internal void RefreshTimeline() => ReadTimeline();
 
+    /// <summary>用元数据里的准确时长覆盖 SMTC 的空值（网易云报告 end=0）。</summary>
+    public void SetKnownDuration(TimeSpan duration)
+    {
+        if (duration > TimeSpan.Zero) Duration = duration;
+    }
+
     void ReadPlaybackState()
     {
         try
         {
+            // 先把"到现在为止的推算值"落成锚点，再切换状态 —— 这样暂停/继续不会丢时间
+            var now = CurrentPosition;
+            Position = now;
+            _anchorAt = Environment.TickCount64;
             var info = _session?.GetPlaybackInfo();
             IsPlaying = info?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
         }
@@ -150,6 +173,7 @@ internal sealed class MediaWatcher : IDisposable
             var props = await session.TryGetMediaPropertiesAsync();
             if (_disposed || session != _session) return;
 
+            if (Title != (props?.Title ?? "")) { Position = TimeSpan.Zero; _anchorAt = Environment.TickCount64; Duration = TimeSpan.Zero; }
             Title = props?.Title ?? "";
             Artist = props?.Artist ?? "";
             if (string.IsNullOrWhiteSpace(Artist)) Artist = props?.AlbumArtist ?? "";

@@ -49,6 +49,7 @@ internal sealed class MenuBarWindow : Window
     Border? _capsule;
     TextBlock? _capsuleText;
     TextBlock? _capsuleIcon;
+    System.Windows.Shapes.Ellipse? _capsuleArt;
     MediaWatcher? _media;
 
     void EnsureMediaWatcher()
@@ -69,13 +70,21 @@ internal sealed class MenuBarWindow : Window
     {
         if (_capsuleText is null || _media is null) return;
         bool playing = _media.HasSession && !string.IsNullOrWhiteSpace(_media.Title);
-        _capsuleText.Text = playing ? _media.Title : "";
+        // 胶囊里显示 "歌名 - 歌手"，和网易云自己的胶囊一样
+        _capsuleText.Text = playing
+            ? (string.IsNullOrWhiteSpace(_media.Artist) ? _media.Title : $"{_media.Title} - {_media.Artist}")
+            : "";
+        if (_capsuleArt?.Fill is ImageBrush brush)
+        {
+            brush.ImageSource = playing ? _media.Art : null;
+            _capsuleArt.Width = _capsuleArt.Height = playing && _media.Art is not null ? 18 : 0;
+        }
         if (_capsuleIcon is not null)
             _capsuleIcon.Opacity = playing ? 1.0 : 0.45;
         if (_capsule is not null)
         {
             _capsule.Visibility = Visibility.Visible;   // 空闲时也在，用户点得到
-            _capsule.Width = playing ? 158 : 44;        // 没在播放就是个小胶囊
+            _capsule.Width = playing ? 196 : 44;        // 没在播放就是个小胶囊
         }
     }
 
@@ -213,7 +222,7 @@ internal sealed class MenuBarWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 76,
+            MaxWidth = 148,
         };
         _capsule = new Border
         {
@@ -224,13 +233,14 @@ internal sealed class MenuBarWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
                 Children =
                 {
-                    (_capsuleIcon = new TextBlock
+                    // 圆形封面：用 Ellipse + ImageBrush（Border + CornerRadius 不会把子元素裁成圆角）
+                    (_capsuleArt = new System.Windows.Shapes.Ellipse
                     {
-                        Text = "●",   // 几何圆点：♪ 在 Segoe UI Variable 里没有字形，会渲染成方块
-                        FontFamily = Typo.Ui,
-                        FontSize = 8,
-                        Margin = new Thickness(0, 0, 5, 0),
+                        Width = 18,
+                        Height = 18,
+                        Margin = new Thickness(0, 0, 6, 0),
                         VerticalAlignment = VerticalAlignment.Center,
+                        Fill = new ImageBrush { Stretch = Stretch.UniformToFill },
                     }),
                     _capsuleText,
                 },
