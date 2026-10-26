@@ -449,8 +449,17 @@ internal sealed class MediaWatcher : IDisposable
     {
         if (_positionTimer is not null) return;
         _positionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        // 调试：MACDOCK_FAKE_DURATION=秒 时把时长伪装成这个值，
+        // 用来在真实播放中触发"贴顶→单曲循环回绕"这条生产代码路径（默认不生效）
+        double fakeDurationSeconds = 0;
+        if (double.TryParse(Environment.GetEnvironmentVariable("MACDOCK_FAKE_DURATION"), out double parsed)
+            && parsed > 0)
+            fakeDurationSeconds = parsed;
+
         _positionTimer.Tick += (_, _) =>
         {
+            if (fakeDurationSeconds > 0) _tracker.SetDuration(TimeSpan.FromSeconds(fakeDurationSeconds));
+
             if (_session is null)
             {
                 _noSessionTicks++;
