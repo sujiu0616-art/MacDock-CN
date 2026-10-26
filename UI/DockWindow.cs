@@ -369,7 +369,10 @@ internal sealed class DockWindow : Window
         StartTrashWatch();
 
         DockConfig.SafeMode = _config.Settings.SafeMode;
-        if (!_config.Settings.SafeMode) KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
+        // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
+        if (_config.Settings.LaunchpadKey != 0)
+            KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _tracker = new WindowTracker(_hwnd);
         _tracker.MinimizeTarget = MinimizeTargetFor;
         _tracker.Changed += SyncWindows;
@@ -1942,7 +1945,10 @@ internal sealed class DockWindow : Window
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
         DockConfig.SafeMode = _config.Settings.SafeMode;
-        if (!_config.Settings.SafeMode) KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
+        // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
+        if (_config.Settings.LaunchpadKey != 0)
+            KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _menuBars?.SetPaused(false);
         _trashTimer?.Start();
         Revalidate();
