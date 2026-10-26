@@ -2156,6 +2156,8 @@ internal sealed class DockWindow : Window
     }
 
     long _switchOverlaySeenAt;
+    readonly System.Collections.Generic.List<long> _fullscreenToggles = new();   // 防抖振
+    long _fullscreenSuspendUntil;
 
     /// <summary>explorer 的"任务切换"遮罩卡住时会吃掉所有应用的点击（见 WindowActions.RepairStuckTaskSwitcher）。</summary>
     void CheckStuckTaskSwitcher()
@@ -2292,6 +2294,24 @@ internal sealed class DockWindow : Window
         else if (_fullscreenWantedSince == DateTime.MinValue) _fullscreenWantedSince = DateTime.UtcNow;
 
         if (_fullscreen == fullscreen) return;
+
+        // 抖振保护：有的应用（壁纸/歌词/某些播放器）会每几秒 True/False 一次。
+        // 每次都跟着收/放，等于让 Explorer 的 appbar 链不停地忙 —— 用户会看到"窗口偶尔没反应"。
+        var nowTicks = Environment.TickCount64;
+        while (_fullscreenToggles.Count > 0 && nowTicks - _fullscreenToggles[0] > 15000) _fullscreenToggles.RemoveAt(0);
+        if (nowTicks < _fullscreenSuspendUntil)
+        {
+            Log.Info($"Fullscreen: ignored ({fullscreen}) - flapping guard active");
+            _fullscreen = fullscreen;   // 记住状态，但不真的动窗口
+            return;
+        }
+        _fullscreenToggles.Add(nowTicks);
+        if (_fullscreenToggles.Count > 4)
+        {
+            _fullscreenSuspendUntil = nowTicks + 30000;
+            _fullscreenToggles.Clear();
+            Log.Info("Fullscreen: toggling too often - suspending fullscreen handling for 30s");
+        }
         Log.Info(fullscreen
             ? $"Fullscreen: True (waited {(DateTime.UtcNow - _fullscreenWantedSince).TotalMilliseconds:0}ms{(immediate ? ", fast path" : "")}) <- {DescribeForeground()}"
             : "Fullscreen: False");
@@ -2389,6 +2409,10 @@ internal sealed class DockWindow : Window
         catch (Exception) { }
         GetWindowThreadProcessId(foreground, out uint pid);
         if (pid == Environment.ProcessId) return false;
+
+        // 壁纸/桌面歌词这类"装饰层"窗口会铺满整屏，还会反复 True/False（网易云的 CloudMusicWallpaperView 就是），
+        // 当全屏处理会让 Dock/菜单栏每几秒抽一次，顺带把 Explorer 的 appbar 链搅得很忙。
+        if (className.Contains("Wallpaper", StringComparison.OrdinalIgnoreCase)) return false;
 
         // 厂商工具/系统通知类进程：它们会画满整屏，但不是应用全屏（联想电脑管家开机弹窗就是这种）。
         try
