@@ -42,9 +42,17 @@ internal sealed class IslandWindow : Window
     string _lyricsKey = "";
     bool _fetchingLyrics;
     int _lyricOffsetMs;
+    Grid? _progressHost;
+    TextBlock? _stateLabel;
     long _lastPersistAt;
     bool _pointerInside;
-    bool? _optimisticPlaying;
+    bool? _optimisticPlaying;   // 已弃用：保留字段避免旧代码引用
+
+    static void SetButtonEnabled(Panel buttons, bool enabled)
+    {
+        if (buttons is null) return;
+        buttons.Opacity = enabled ? 1.0 : 0.5;
+    }
 
     public static bool IsOpen => _open is not null;
 
@@ -106,9 +114,7 @@ internal sealed class IslandWindow : Window
         var play = GlyphButton(PlayGeometry, () =>
         {
             // 乐观更新：先把图标切过去，事件回来再对齐（网易云的命令回执常有几百毫秒）
-            _optimisticPlaying = !(_media?.IsPlaying ?? false);
-            _playGlyph.Data = Geometry.Parse((_optimisticPlaying == true) ? PauseGeometry : PlayGeometry);
-            _media?.PlayPause();
+            _media?.PlayPause();   // 不做乐观更新：命令后回读真值再刷新
         });
         var next = GlyphButton("M1,1 L9.4,6 L1,11 Z M10.2,1 L11.6,1 L11.6,11 L10.2,11 Z", () => _media?.Next());
         _buttons.Children.Add(prev);
@@ -139,14 +145,20 @@ internal sealed class IslandWindow : Window
             HorizontalAlignment = HorizontalAlignment.Left,
             Width = 0,
         };
-        var progressHost = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        var progressHost = new Grid { Margin = new Thickness(0, 8, 0, 0), Background = Brushes.Transparent };
+        _progressHost = progressHost;
         progressHost.Children.Add(_progressTrack);
         progressHost.Children.Add(_progressFill);
+
+        _stateLabel = MakeText("", 10, FontWeights.Normal, 120);
+        _stateLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        _stateLabel.Opacity = 0.75;
 
         _elapsed = MakeText("0:00", 10, FontWeights.Normal, 60);
         _total = MakeText("0:00", 10, FontWeights.Normal, 60);
         _total.HorizontalAlignment = HorizontalAlignment.Right;
         var times = new Grid { Margin = new Thickness(0, 3, 0, 0) };
+        times.Children.Add(_stateLabel);
         times.Children.Add(_elapsed);
         times.Children.Add(_total);
 
@@ -157,6 +169,18 @@ internal sealed class IslandWindow : Window
         stack.Children.Add(progressHost);
         stack.Children.Add(times);
         _progressTrack.SizeChanged += (_, _) => UpdateProgressAndLyric();
+
+        // 点进度条跳转（网易云是否支持由 SMTC 的 Controls.IsPlaybackPositionEnabled 决定）
+        progressHost.MouseLeftButtonDown += (_, e) =>
+        {
+            var media = _media;
+            if (media is null || !media.CanSeek || media.Duration <= TimeSpan.Zero) return;
+            double width = progressHost.ActualWidth;
+            if (width <= 0) return;
+            double ratio = Math.Clamp(e.GetPosition(progressHost).X / width, 0, 1);
+            media.Seek(TimeSpan.FromMilliseconds(media.Duration.TotalMilliseconds * ratio));
+            e.Handled = true;
+        };
         _mediaGrid = new Grid();
         _mediaGrid.Children.Add(stack);
 
@@ -232,7 +256,10 @@ internal sealed class IslandWindow : Window
             Background = Brushes.Transparent,
             Cursor = Cursors.Hand,
         };
-        border.MouseLeftButtonUp += (_, e) => { action(); e.Handled = true; };
+        border.MouseLeftButtonUp += (_, e) =>
+        {
+            action(); e.Handled = true;
+        };
         border.MouseEnter += (_, _) => border.Background = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
         border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
         return border;
@@ -331,8 +358,9 @@ internal sealed class IslandWindow : Window
         _artist.Text = media.Artist;
         _art.Source = media.Art;
         _art.Visibility = media.Art is null ? Visibility.Hidden : Visibility.Visible;
-        bool playing = _optimisticPlaying ?? media.IsPlaying;
-        if (_optimisticPlaying is not null && _optimisticPlaying == media.IsPlaying) _optimisticPlaying = null;
+        bool playing = media.IsPlaying;   // 以回读到的真实状态为准（命令后 120/450ms 各回读一次）
+        SetButtonEnabled(_buttons, media.CanPlayPause || media.CanNext || media.CanPrevious);
+        _playGlyph.Opacity = media.CanPlayPause ? 1.0 : 0.35;
         _playGlyph.Data = Geometry.Parse(playing ? PauseGeometry : PlayGeometry);
         UpdateProgressAndLyric();
         StartLyricsFetch(media.Title, media.Artist);
@@ -381,11 +409,24 @@ internal sealed class IslandWindow : Window
             _progressFill.Width = 0;
             _total.Text = "--:--";
         }
-        _elapsed.Text = Format(position);
+        _elapsed.Text = media.PositionKnown ? Format(position) : "--:--";
 
         // 歌词行：位置 + 用户偏移（网易云不报位置，残留误差靠配置里的 LyricOffsetMs 修）
         var lyricPosition = position + TimeSpan.FromMilliseconds(_lyricOffsetMs);
-        _lyric.Text = _lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "";
+        _lyric.Text = media.PositionKnown
+            ? (_lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "")
+            : "";
+
+        if (_stateLabel is not null)
+        {
+            _stateLabel.Text = media.PlaybackState switch
+            {
+                MacDock.Core.MediaWatcher.State.Buffering => "缓冲中…",
+                MacDock.Core.MediaWatcher.State.Paused => "已暂停",
+                MacDock.Core.MediaWatcher.State.Stopped => "已停止",
+                _ => "",
+            };
+        }
 
         // 每 5 秒把位置落盘：MacDock 自己重启后能接着算，而不是从 0 开始
         if (Environment.TickCount64 - _lastPersistAt > 5000)

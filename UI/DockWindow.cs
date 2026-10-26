@@ -109,6 +109,20 @@ internal sealed class DockWindow : Window
     /// <summary>全屏检测心跳：任务栏被隐藏后 Explorer 的 ABN_FULLSCREENAPP 不可靠，自己每 120ms 看一眼。</summary>
     bool _compacting;
 
+    void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != Microsoft.Win32.PowerModes.Resume) return;
+        Log.Info("Power: resumed - rebuilding media sessions");
+        Dispatcher.BeginInvoke(new Action(() => MenuBarWindow.Instance?.Restart()));
+    }
+
+    void OnSessionSwitch(object? sender, Microsoft.Win32.SessionSwitchEventArgs e)
+    {
+        if (e.Reason != Microsoft.Win32.SessionSwitchReason.SessionUnlock && e.Reason != Microsoft.Win32.SessionSwitchReason.SessionLogon) return;
+        Log.Info("Session: unlocked - rebuilding media sessions");
+        Dispatcher.BeginInvoke(new Action(() => MenuBarWindow.Instance?.Restart()));
+    }
+
     /// <summary>强制紧凑 GC 会阻塞调用线程 100~500ms，绝不能放在 UI 线程上（Explorer 会跟着等）。</summary>
     void CompactInBackground()
     {
@@ -273,6 +287,10 @@ internal sealed class DockWindow : Window
             CheckStuckTaskSwitcher();
         };
         UiWatchdog.Start(Dispatcher);
+
+        // 睡眠唤醒 / 解锁后 SMTC 管理器可能失效：重建媒体会话，避免灵动岛卡在旧信息上
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        Microsoft.Win32.SystemEvents.SessionSwitch += OnSessionSwitch;
         InteractionWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
 

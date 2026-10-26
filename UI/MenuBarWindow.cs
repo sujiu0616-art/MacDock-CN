@@ -54,12 +54,17 @@ internal sealed class MenuBarWindow : Window
     TranslateTransform? _capsuleShift;
     MediaWatcher? _media;
 
+    /// <summary>当前活动的媒体中枢（DockWindow 在睡眠唤醒/解锁时会用它重建会话）。</summary>
+    public static MediaWatcher? Instance { get; private set; }
+
     void EnsureMediaWatcher()
     {
         if (_media is not null) return;
         _media = new MediaWatcher(Dispatcher);
         _media.Changed += OnMediaChanged;
         _media.Start();
+        _media.StartPersistence();
+        Instance = _media;
     }
 
     void OnMediaChanged()
@@ -74,7 +79,8 @@ internal sealed class MenuBarWindow : Window
     void UpdateCapsule()
     {
         if (_capsuleText is null || _media is null) return;
-        bool playing = _media.HasSession && !string.IsNullOrWhiteSpace(_media.Title);
+        // 有会话且有元数据就显示（暂停也显示）；只有会话消失/无标题时才收起
+        bool playing = _media.HasMetadata;
         // 胶囊里显示 "歌名 - 歌手"，和网易云自己的胶囊一样
         _capsuleText.Text = playing
             ? (string.IsNullOrWhiteSpace(_media.Artist) ? _media.Title : $"{_media.Title} - {_media.Artist}")
@@ -322,7 +328,7 @@ internal sealed class MenuBarWindow : Window
             BorderBrush = Brushes.Transparent,
         };
         _capsuleViewport!.Children.Add(_capsuleText);
-        _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
+                _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
         _capsule.MouseEnter += (_, _) => UpdateCapsuleLook(hover: true);
         _capsule.MouseLeave += (_, _) => UpdateCapsuleLook(hover: false);
         _root.Children.Add(_capsule);
