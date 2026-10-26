@@ -2179,6 +2179,9 @@ internal sealed class DockWindow : Window
 
     long _switchOverlaySeenAt;
     IntPtr _fullscreenOwner;        // 已认定全屏的窗口（粘性判定用）
+    uint _fullscreenPid;            // 全屏窗口所属进程（游戏换窗口时靠它找回）
+    long _fullscreenLostSince;      // owner 失效的起始时间（宽限期用）
+
     long _otherForegroundSince;     // 另一个真实应用窗口成为前台的时间
 
     readonly System.Collections.Generic.List<long> _fullscreenToggles = new();   // 防抖振
@@ -2401,6 +2404,36 @@ internal sealed class DockWindow : Window
     /// 是不是"另一个应用的真实窗口"（判断用户是否主动切走了全屏应用）。
     /// 通知气泡、输入法、托盘弹窗、shell 自身窗口都不算。
     /// </summary>
+    /// <summary>在指定进程里找一个"仍然铺满屏幕"的顶层窗口（游戏换窗口/重建 hwnd 时用）。</summary>
+    IntPtr FindFullscreenWindowOfPid(uint pid)
+    {
+        IntPtr found = IntPtr.Zero;
+        var bounds = CurrentDisplay().Bounds;
+        var work = CurrentDisplay().Work;
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out uint owner);
+            if (owner != pid) return true;
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
+            if (!GetWindowRect(hwnd, out var rect)) return true;
+            if (IsFullscreenRect(rect, bounds, work) || IsNearlyFullScreen(rect, bounds))
+            {
+                found = hwnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    /// <summary>覆盖 ≥95% 屏幕面积（兜住"比屏幕小几像素"的全屏）。</summary>
+    static bool IsNearlyFullScreen(RECT rect, RECT bounds)
+    {
+        double area = (double)rect.Width * rect.Height;
+        double screen = (double)bounds.Width * bounds.Height;
+        return screen > 0 && area >= screen * 0.95;
+    }
+
     bool IsOtherAppWindow(IntPtr hwnd)
     {
         var root = GetAncestor(hwnd, 2 /* GA_ROOT */);
@@ -2461,6 +2494,11 @@ internal sealed class DockWindow : Window
     {
         var foreground = GetForegroundWindow();
 
+        // 关键修正：游戏/播放器的**子窗口**经常拿到前台，子窗口矩形当然不等于整块屏。
+        // 先把前台归一成 root window 再做几何判断，否则会判成"不是全屏"，Dock 就在全屏画面上蹦出来。
+        var rootWindow = GetAncestor(foreground, 2 /* GA_ROOT */);
+        if (rootWindow != IntPtr.Zero) foreground = rootWindow;
+
         // 粘性：已认定全屏的窗口还在、还铺满 → 保持全屏，完全不看当前前台是谁
         // （通知/托盘气泡/微信消息抢一下前台就弹 Dock 的毛病就是这么来的）
         if (_fullscreenOwner != IntPtr.Zero)
@@ -2471,8 +2509,29 @@ internal sealed class DockWindow : Window
                                    && GetWindowRect(_fullscreenOwner, out var ownerRect)
                                    && IsFullscreenRect(ownerRect, CurrentDisplay().Bounds, CurrentDisplay().Work);
 
+            if (!stillFullscreen && _fullscreenPid != 0)
+            {
+                // 游戏/UE 引擎会重建窗口：旧 hwnd 没了，但同进程还有另一个铺满的窗口 → 换过去
+                var replacement = FindFullscreenWindowOfPid(_fullscreenPid);
+                if (replacement != IntPtr.Zero)
+                {
+                    Log.Info($"Fullscreen: owner replaced by another window of pid {_fullscreenPid} (hwnd {replacement})");
+                    _fullscreenOwner = replacement;
+                    stillFullscreen = true;
+                    _fullscreenLostSince = 0;
+                }
+            }
+
+            if (!stillFullscreen && _fullscreenOwner != IntPtr.Zero)
+            {
+                // 宽限期：确实找不到就再等 800ms 才真的退出（避免一帧的抖动把 Dock 弹出来）
+                if (_fullscreenLostSince == 0) _fullscreenLostSince = Environment.TickCount64;
+                else if (Environment.TickCount64 - _fullscreenLostSince < 800) stillFullscreen = true;
+            }
+
             if (stillFullscreen)
             {
+                _fullscreenLostSince = 0;
                 if (foreground != IntPtr.Zero && foreground != _fullscreenOwner && IsOtherAppWindow(foreground))
                 {
                     if (_otherForegroundSince == 0) _otherForegroundSince = Environment.TickCount64;
@@ -2487,14 +2546,19 @@ internal sealed class DockWindow : Window
                 {
                     // 只有前台真的换成别的应用窗口时才值得记一笔（通知/气泡属于常态噪音）
                     if (_otherForegroundSince != 0)
-                        Log.Info($"Fullscreen: kept (owner still fullscreen, foreground is {ProcessNameOf(GetWindowThreadProcessId(foreground, out _))})");
+                        {
+                        GetWindowThreadProcessId(foreground, out uint fgPid);
+                        Log.Info($"Fullscreen: kept (owner still fullscreen, foreground is {ProcessNameOf(fgPid)})");
+                    }
                     return true;
                 }
             }
             else
             {
                 _fullscreenOwner = IntPtr.Zero;
+                _fullscreenPid = 0;
                 _otherForegroundSince = 0;
+                _fullscreenLostSince = 0;
             }
         }
 
@@ -2543,8 +2607,24 @@ internal sealed class DockWindow : Window
         if (IsMaximized(foreground) && !IsFullscreenRect(rect, bounds, display.Work)) return false;
 
         // 结构性判据：压进"菜单栏那条"与"Dock 那条"各一半以上才算全屏
+        // 判据一：结构性（压进菜单栏条与 Dock 条各一半以上）
         bool fullscreen = IsFullscreenRect(rect, bounds, display.Work);
-        if (fullscreen) _fullscreenOwner = GetAncestor(foreground, 2 /* GA_ROOT */);
+
+        // 判据二：覆盖 ≥95% 屏幕面积也算全屏。
+        // 现在顶部预留只有 48px，最大化窗口 ≈ 91%，所以这条不会把最大化误判成全屏；
+        // 但能兜住那些"全屏窗口比屏幕小几像素/被 DWM 修过边框"的情况。
+        if (!fullscreen)
+        {
+            double area = (double)rect.Width * rect.Height;
+            double screen = (double)bounds.Width * bounds.Height;
+            if (screen > 0 && area >= screen * 0.95) fullscreen = true;
+        }
+        if (fullscreen)
+        {
+            _fullscreenOwner = GetAncestor(foreground, 2 /* GA_ROOT */);
+            GetWindowThreadProcessId(_fullscreenOwner, out _fullscreenPid);
+            _fullscreenLostSince = 0;
+        }
         return fullscreen;
     }
 
