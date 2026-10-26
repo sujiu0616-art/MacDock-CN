@@ -65,6 +65,9 @@ internal sealed class MenuBarWindow : Window
     void OnMediaChanged()
     {
         UpdateCapsule();
+        // 媒体没了（暂停到无会话/切到别的播放器又停了）→ 展开的卡片一起收起来
+        if (IslandWindow.IsOpen && (_media is null || !_media.HasSession || string.IsNullOrWhiteSpace(_media.Title)))
+            IslandWindow.HideIsland();
         if (IslandWindow.IsOpen) IslandWindow.ShowCentered(_hwnd, _media!);
     }
 
@@ -83,7 +86,8 @@ internal sealed class MenuBarWindow : Window
         }
         if (_capsuleIcon is not null)
             _capsuleIcon.Opacity = playing ? 1.0 : 0.45;
-        if (_capsule is not null) _capsule.Visibility = Visibility.Visible;
+        // 没在播放就**完全不显示**：不留占位、不建窗口、不跑动画（省资源也更好看）
+        if (_capsule is not null) _capsule.Visibility = playing ? Visibility.Visible : Visibility.Collapsed;
         FitCapsule(playing);
     }
 
@@ -161,6 +165,8 @@ internal sealed class MenuBarWindow : Window
     void ToggleIsland()
     {
         EnsureMediaWatcher();
+        // 没有正在播放的媒体：不创建岛屿窗口（省资源）
+        if (_media is null || !_media.HasSession || string.IsNullOrWhiteSpace(_media.Title)) return;
         if (IslandWindow.IsOpen) { IslandWindow.HideIsland(); return; }
         IslandWindow.ShowCentered(_hwnd, _media!);
     }
