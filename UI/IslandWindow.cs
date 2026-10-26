@@ -42,6 +42,7 @@ internal sealed class IslandWindow : Window
     string _lyricsKey = "";
     bool _fetchingLyrics;
     int _lyricOffsetMs;
+    TextBlock? _artPlaceholder;
     Grid? _progressHost;
     TextBlock? _stateLabel;
     long _lastPersistAt;
@@ -82,9 +83,23 @@ internal sealed class IslandWindow : Window
         // ── 封面 ───────────────────────────────────────────────────────────
         _art = new Image { Width = 52, Height = 52, Stretch = Stretch.UniformToFill };
         RenderOptions.SetBitmapScalingMode(_art, BitmapScalingMode.HighQuality);
+        _artPlaceholder = new TextBlock
+        {
+            Text = "\u266A",                       // ♪
+            FontFamily = new FontFamily("Segoe UI Symbol, Segoe UI"),
+            FontSize = 22,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Frozen(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
+        };
+
+        var artStack = new Grid();
+        artStack.Children.Add(_artPlaceholder);
+        artStack.Children.Add(_art);
+
         var artFrame = new Border
         {
-            Child = _art,
+            Child = artStack,
             Width = 52,
             Height = 52,
             CornerRadius = new CornerRadius(11),
@@ -364,7 +379,9 @@ internal sealed class IslandWindow : Window
         _title.Text = media!.Title;
         _artist.Text = media.Artist;
         _art.Source = media.Art;
-        _art.Visibility = media.Art is null ? Visibility.Hidden : Visibility.Visible;
+        bool hasArt = media.Art is not null;
+        _art.Visibility = hasArt ? Visibility.Visible : Visibility.Hidden;
+        if (_artPlaceholder is not null) _artPlaceholder.Visibility = hasArt ? Visibility.Hidden : Visibility.Visible;
         bool playing = media.IsPlaying;   // 以回读到的真实状态为准（命令后 120/450ms 各回读一次）
         SetButtonEnabled(_buttons, media.CanPlayPause || media.CanNext || media.CanPrevious);
         _playGlyph.Opacity = media.CanPlayPause ? 1.0 : 0.35;

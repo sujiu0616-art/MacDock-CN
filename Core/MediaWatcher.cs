@@ -296,6 +296,7 @@ internal sealed class MediaWatcher : IDisposable
                 Log.Info("Media: controls flags empty for " + AppId + " - assuming play/pause/next/prev enabled");
             }
 
+            var previousState = PlaybackState;
             PlaybackState = status switch
             {
                 GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing => State.Playing,
@@ -305,6 +306,8 @@ internal sealed class MediaWatcher : IDisposable
                 GlobalSystemMediaTransportControlsSessionPlaybackStatus.Closed => State.Stopped,
                 _ => State.Paused,
             };
+            if (previousState != PlaybackState)
+                Log.Info($"Media: state {previousState} -> {PlaybackState} (status={status})");
         }
         catch (Exception)
         {
@@ -391,6 +394,8 @@ internal sealed class MediaWatcher : IDisposable
             }
 
             var art = await LoadArtCachedAsync(_metadataKey, props.Thumbnail);
+            // 调试开关：想验证"没有封面时的占位表现"时，把 MACDOCK_FORCE_NOART=1 设进环境变量即可
+            if (Environment.GetEnvironmentVariable("MACDOCK_FORCE_NOART") == "1") art = null;
             bool isNewSong = !string.Equals(loggedKey, _metadataKey, StringComparison.Ordinal);
             if (isNewSong) Log.Info($"Media: song '{title}' - {artist} (album='{album}' art={(art is null ? "no" : "yes")})");
             loggedKey = _metadataKey;

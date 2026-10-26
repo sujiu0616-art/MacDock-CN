@@ -87,8 +87,11 @@ internal sealed class MenuBarWindow : Window
             : "";
         if (_capsuleArt?.Fill is ImageBrush brush)
         {
+            // 有封面就显示封面；没封面给一个淡色占位圆，保持文字对齐稳定
+            bool hasArt = playing && _media.Art is not null;
+            _capsuleArt.Width = _capsuleArt.Height = playing ? 18 : 0;
             brush.ImageSource = playing ? _media.Art : null;
-            _capsuleArt.Width = _capsuleArt.Height = playing && _media.Art is not null ? 18 : 0;
+            _capsuleArt.Fill = hasArt ? (Brush)brush : new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
         }
         if (_capsuleIcon is not null)
             _capsuleIcon.Opacity = playing ? 1.0 : 0.45;
