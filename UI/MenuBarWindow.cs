@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -42,6 +44,62 @@ internal sealed class MenuBarWindow : Window
     TextBlock? _inputText;
     Border? _inputCell;
     readonly System.Windows.Threading.DispatcherTimer _inputTimer = new();
+
+    // ── 灵动岛（媒体胶囊）────────────────────────────────────────────────
+    Border? _capsule;
+    TextBlock? _capsuleText;
+    MediaWatcher? _media;
+
+    void EnsureMediaWatcher()
+    {
+        if (_media is not null) return;
+        _media = new MediaWatcher(Dispatcher);
+        _media.Changed += OnMediaChanged;
+        _media.Start();
+    }
+
+    void OnMediaChanged()
+    {
+        UpdateCapsule();
+        if (IslandWindow.IsOpen) IslandWindow.ShowCentered(_hwnd, _media!);
+    }
+
+    void UpdateCapsule()
+    {
+        if (_capsuleText is null || _media is null) return;
+        bool playing = _media.HasSession && !string.IsNullOrWhiteSpace(_media.Title);
+        _capsuleText.Text = playing
+            ? (_media.IsPlaying ? "\uE769  " : "\uE768  ") + _media.Title
+            : "";
+        if (_capsule is not null)
+        {
+            _capsule.Visibility = Visibility.Visible;   // 空闲时也在，用户点得到
+            _capsule.Width = playing ? 150 : 44;        // 没在播放就是个小胶囊
+        }
+    }
+
+    void UpdateCapsuleLook(bool hover)
+    {
+        if (_capsule is null) return;
+        bool dark = Theme.IsDark;
+        byte alpha = (byte)(hover ? 0x3A : 0x22);
+        _capsule.Background = new SolidColorBrush(dark
+            ? Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF)
+            : Color.FromArgb(alpha, 0x00, 0x00, 0x00));
+        _capsule.BorderBrush = new SolidColorBrush(dark
+            ? Color.FromArgb((byte)(alpha + 0x10), 0xFF, 0xFF, 0xFF)
+            : Color.FromArgb((byte)(alpha + 0x10), 0x00, 0x00, 0x00));
+        if (_capsuleText is not null)
+            _capsuleText.Foreground = new SolidColorBrush(dark ? Colors.White : Color.FromRgb(0x20, 0x20, 0x24));
+    }
+
+    void ToggleIsland()
+    {
+        EnsureMediaWatcher();
+        if (IslandWindow.IsOpen) { IslandWindow.HideIsland(); return; }
+        IslandWindow.ShowCentered(_hwnd, _media!);
+    }
+
     readonly List<TextBlock> _texts = [];
     readonly List<Shape> _shapes = [];
 
@@ -143,6 +201,38 @@ internal sealed class MenuBarWindow : Window
         _inputTimer.Interval = TimeSpan.FromMilliseconds(500);
         _inputTimer.Tick += (_, _) => UpdateInputLabel();
         _inputTimer.Start();
+
+        // 灵动岛：菜单栏正中的小胶囊（收起态没有任何动画/计时器）
+        _capsuleText = new TextBlock
+        {
+            Text = "",
+            FontFamily = Typo.Ui,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 76,
+        };
+        _capsule = new Border
+        {
+            Child = _capsuleText,
+            Width = 92,
+            Height = 26,
+            CornerRadius = new CornerRadius(13),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Hand,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            BorderBrush = Brushes.Transparent,
+        };
+        _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
+        _capsule.MouseEnter += (_, _) => UpdateCapsuleLook(hover: true);
+        _capsule.MouseLeave += (_, _) => UpdateCapsuleLook(hover: false);
+        _root.Children.Add(_capsule);
+        EnsureMediaWatcher();
+        UpdateCapsule();
+        UpdateCapsuleLook(hover: false);
 
         _root.Children.Add(left);
         _root.Children.Add(right);
