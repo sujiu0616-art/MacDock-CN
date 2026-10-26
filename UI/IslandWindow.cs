@@ -158,8 +158,15 @@ internal sealed class IslandWindow : Window
         _total = MakeText("0:00", 10, FontWeights.Normal, 60);
         _total.HorizontalAlignment = HorizontalAlignment.Right;
         var times = new Grid { Margin = new Thickness(0, 3, 0, 0) };
-        times.Children.Add(_stateLabel);
+        times.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        times.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        times.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(_elapsed, 0);
+        Grid.SetColumn(_stateLabel, 1);
+        Grid.SetColumn(_total, 2);
+        _total.TextAlignment = TextAlignment.Right;
         times.Children.Add(_elapsed);
+        times.Children.Add(_stateLabel);
         times.Children.Add(_total);
 
         // ── 组合 ───────────────────────────────────────────────────────────
@@ -379,7 +386,8 @@ internal sealed class IslandWindow : Window
         {
             var info = await LyricsService.GetAsync(title, artist);
             _fetchingLyrics = false;
-            if (info is null) return;
+            if (info is null) { Log.Info($"Lyrics: fetch returned null for '{title}'"); return; }
+            Log.Info($"Lyrics: fetched {info.Lyrics?.Lines.Count ?? 0} lines, duration={info.Duration.TotalSeconds:F0}s for '{title}'");
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (_lyricsKey != key) return;   // 期间又换歌了
@@ -417,15 +425,10 @@ internal sealed class IslandWindow : Window
             ? (_lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "")
             : "";
 
+        if (_stateLabel is not null && _stateLabel.Text != Label(media)) Log.Info($"Island: state {media.PlaybackState} known={media.PositionKnown} pos={position.TotalSeconds:F1}s");
         if (_stateLabel is not null)
         {
-            _stateLabel.Text = media.PlaybackState switch
-            {
-                MacDock.Core.MediaWatcher.State.Buffering => "缓冲中…",
-                MacDock.Core.MediaWatcher.State.Paused => "已暂停",
-                MacDock.Core.MediaWatcher.State.Stopped => "已停止",
-                _ => "",
-            };
+            _stateLabel.Text = Label(media);
         }
 
         // 每 5 秒把位置落盘：MacDock 自己重启后能接着算，而不是从 0 开始
@@ -435,6 +438,14 @@ internal sealed class IslandWindow : Window
             media.PersistPosition();
         }
     }
+
+    static string Label(MacDock.Core.MediaWatcher media) => media.PlaybackState switch
+    {
+        MacDock.Core.MediaWatcher.State.Buffering => "缓冲中…",
+        MacDock.Core.MediaWatcher.State.Paused => "已暂停",
+        MacDock.Core.MediaWatcher.State.Stopped => "已停止",
+        _ => "",
+    };
 
     static string Format(TimeSpan value) => value.TotalHours >= 1
         ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"

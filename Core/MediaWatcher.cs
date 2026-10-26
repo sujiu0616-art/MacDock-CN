@@ -158,7 +158,10 @@ internal sealed class MediaWatcher : IDisposable
         if (_disposed) return;
         try
         {
+            int sessionCount = 0;
+            try { sessionCount = _manager?.GetSessions()?.Count ?? 0; } catch (Exception) { }
             var best = PickSession();
+            Log.Info($"Media: sessions={sessionCount} picked={(best is null ? "none" : SafeAppId(best))}");
             if (ReferenceEquals(best, _session)) { Refresh(); return; }
 
             Detach();
@@ -356,6 +359,7 @@ internal sealed class MediaWatcher : IDisposable
     string _metadataKey = "";
     string loggedKey = "";
     bool _sawSongChange;
+    bool _firstMetadataApplied;
 
     async Task ReadMetadataAsync()
     {
@@ -387,6 +391,9 @@ internal sealed class MediaWatcher : IDisposable
                 Position = resumed ?? TimeSpan.Zero;
                 _anchorAt = Environment.TickCount64;
                 if (resumed is null) Duration = TimeSpan.Zero;
+                // 亲眼看到换歌 → 位置从 0 开始，可信；有落盘续算也可信；首次拿到元数据（可能已播一半）仍不可信
+                _positionKnown = resumed is not null || _firstMetadataApplied;
+                _firstMetadataApplied = true;
             }
 
             var art = await LoadArtCachedAsync(_metadataKey, props.Thumbnail);
