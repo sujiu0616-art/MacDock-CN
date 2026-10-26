@@ -6,29 +6,26 @@ using Windows.Storage.Streams;
 namespace MacDock.Core;
 
 /// <summary>
-/// SMTC 媒体会话中枢（事件驱动，零轮询）。
+/// SMTC 媒体会话中枢（事件驱动，零轮询；只有 1 秒的位置看门狗 + 15 秒的落盘）。
 ///
-/// 设计要点（对应"灵动岛数据层"的验收项）：
-/// · 会话选择：优先"正在播放"的会话，其次系统当前会话；网易云/浏览器/其它播放器同时存在时不会串台
-/// · 元数据原子更新：标题/歌手/专辑/封面来自**同一次读取**，一起替换，绝不出现"新歌名 + 旧歌手"
-/// · 封面缓存：按 标题|歌手|专辑 缓存，同一首歌不重复解码
-/// · 时长/进度：SMTC 时间轴非 0 就用真值；为 0（网易云）时按播放速率外推，状态变化时重新对齐
-/// · 播放状态：Playing / Paused / Stopped / Buffering 四种区分
-/// · 控制：每个命令先看 Controls 是否可用；命令后回读真实状态，不做纯乐观更新
+/// 分工：
+/// · 本类只负责"取"：会话选择、元数据/封面读取、状态与控制可用性、命令下发与回读；
+/// · 位置推进、封顶、单曲循环回绕等**判断**都在 <see cref="PositionTracker"/>（有单测）；
+/// · 会话优先级打分在 <see cref="MediaRules"/>（有单测）。
 /// </summary>
 internal sealed class MediaWatcher : IDisposable
 {
     readonly Dispatcher _dispatcher;
+    readonly PositionTracker _tracker = new();
     GlobalSystemMediaTransportControlsSessionManager? _manager;
     GlobalSystemMediaTransportControlsSession? _session;
     bool _disposed;
 
     public MediaWatcher(Dispatcher dispatcher) => _dispatcher = dispatcher;
 
-    /// <summary>状态有变化时触发（UI 线程）。</summary>
     public event Action? Changed;
 
-    // ── 元数据（整体替换，保证一致）─────────────────────────────────────
+    // ── 元数据 ──────────────────────────────────────────────────────────
     public string Title { get; private set; } = "";
     public string Artist { get; private set; } = "";
     public string Album { get; private set; } = "";
@@ -37,15 +34,13 @@ internal sealed class MediaWatcher : IDisposable
     public bool HasSession => _session is not null;
     public bool HasMetadata => _session is not null && !string.IsNullOrWhiteSpace(Title);
 
-    // ── 播放状态 ────────────────────────────────────────────────────────
+    // ── 状态 ────────────────────────────────────────────────────────────
     public enum State { Stopped, Playing, Paused, Buffering }
 
     public State PlaybackState { get; private set; } = State.Stopped;
     public bool IsPlaying => PlaybackState == State.Playing;
     public bool IsBuffering => PlaybackState == State.Buffering;
-
-    /// <summary>播放速率（SMTC 不给就按 1.0）。用于推进位置外推。</summary>
-    public double Rate { get; private set; } = 1.0;
+    public double Rate => _tracker.Rate;
 
     // ── 控制可用性 ──────────────────────────────────────────────────────
     public bool CanPlayPause { get; private set; }
@@ -53,25 +48,13 @@ internal sealed class MediaWatcher : IDisposable
     public bool CanPrevious { get; private set; }
     public bool CanSeek { get; private set; }
 
-    // ── 进度 ────────────────────────────────────────────────────────────
-    /// <summary>时间轴报告的位置（锚点）。</summary>
-    TimeSpan Position { get; set; }
-    public TimeSpan Duration { get; private set; }
-    long _anchorAt;
-    bool _timelineIsReal;          // SMTC 时间轴是不是真值（网易云为 false）
-    bool _positionKnown;           // 位置是否可信：时间轴真值 / 落盘续算 / 亲眼看到换歌
+    // ── 进度（全部委托给 tracker）───────────────────────────────────────
+    public TimeSpan Duration => _tracker.Duration;
+    public TimeSpan CurrentPosition => _tracker.Current(Environment.TickCount64);
+    public bool PositionKnown => _tracker.Known;
+    public bool TimelineIsReal { get; private set; }
 
-    public bool PositionKnown => _positionKnown;
-
-    /// <summary>当前位置：真值 + 按速率外推（暂停时就是锚点本身）。</summary>
-    public TimeSpan CurrentPosition
-    {
-        get
-        {
-            bool advancing = PlaybackState is State.Playing or State.Buffering;
-            return MediaRules.ProjectPosition(Position, _anchorAt, Environment.TickCount64, Rate, Duration, advancing);
-        }
-    }
+    public void SetKnownDuration(TimeSpan duration) => _tracker.SetDuration(duration);
 
     // ── 封面缓存 ────────────────────────────────────────────────────────
     static readonly Dictionary<string, BitmapSource?> ArtCache = new(StringComparer.OrdinalIgnoreCase);
@@ -79,11 +62,8 @@ internal sealed class MediaWatcher : IDisposable
     // ── 生命周期 ────────────────────────────────────────────────────────
     public async void Start() => await InitAsync();
 
-    /// <summary>睡眠唤醒 / 解锁后重新接管（SMTC 管理器可能已经失效）。</summary>
-    public void Restart()
-    {
-        _ = InitAsync();
-    }
+    /// <summary>睡眠唤醒 / 解锁 / 会话丢失后重建（事件与自愈共用这条路径）。</summary>
+    public void Restart() => _ = InitAsync();
 
     async Task InitAsync()
     {
@@ -112,7 +92,7 @@ internal sealed class MediaWatcher : IDisposable
     void OnSessionsChanged(GlobalSystemMediaTransportControlsSessionManager sender, SessionsChangedEventArgs args)
         => _dispatcher.BeginInvoke(new Action(AttachBestSession));
 
-    /// <summary>多个会话并存时挑一个：正在播放 &gt; 系统当前会话 &gt; 第一个有元数据的。</summary>
+    // ── 会话选择（规则在 MediaRules）────────────────────────────────────
     GlobalSystemMediaTransportControlsSession? PickSession()
     {
         if (_manager is null) return null;
@@ -152,6 +132,14 @@ internal sealed class MediaWatcher : IDisposable
         catch (Exception) { return null; }
     }
 
+    static string SafeAppId(GlobalSystemMediaTransportControlsSession session)
+    {
+        try { return session.SourceAppUserModelId ?? ""; }
+        catch (Exception) { return ""; }
+    }
+
+    string _lastSessionLog = "";
+
     void AttachBestSession()
     {
         if (_disposed) return;
@@ -159,6 +147,7 @@ internal sealed class MediaWatcher : IDisposable
         {
             int sessionCount = 0;
             try { sessionCount = _manager?.GetSessions()?.Count ?? 0; } catch (Exception) { }
+
             var best = PickSession();
             string logKey = sessionCount + ":" + (best is null ? "none" : SafeAppId(best));
             if (logKey != _lastSessionLog)
@@ -166,16 +155,12 @@ internal sealed class MediaWatcher : IDisposable
                 _lastSessionLog = logKey;
                 Log.Info($"Media: sessions={sessionCount} picked={(best is null ? "none" : SafeAppId(best))}");
             }
+
             if (ReferenceEquals(best, _session)) { Refresh(); return; }
 
             Detach();
             _session = best;
-            if (_session is null)
-            {
-                ClearState();
-                Changed?.Invoke();
-                return;
-            }
+            if (_session is null) { ClearState(); Changed?.Invoke(); return; }
 
             _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
             _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
@@ -193,12 +178,6 @@ internal sealed class MediaWatcher : IDisposable
         }
     }
 
-    static string SafeAppId(GlobalSystemMediaTransportControlsSession session)
-    {
-        try { return session.SourceAppUserModelId ?? ""; }
-        catch (Exception) { return ""; }
-    }
-
     void Detach()
     {
         if (_session is null) return;
@@ -212,48 +191,20 @@ internal sealed class MediaWatcher : IDisposable
         _session = null;
     }
 
-    /// <summary>SMTC 会话在源进程退出后仍会残留：按 AUMID 里的 exe 名查进程，查不到就当没有会话。</summary>
-    static bool IsSourceAlive(string aumid)
-        => MediaRules.IsSourceAlive(aumid, name =>
-        {
-            try { return System.Diagnostics.Process.GetProcessesByName(name).Length > 0; }
-            catch (Exception) { return true; }
-        });
-
-    System.Windows.Threading.DispatcherTimer? _livenessTimer;
-
-    void StartLivenessWatch()
-    {
-        if (_livenessTimer is not null) return;
-        _livenessTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _livenessTimer.Tick += (_, _) =>
-        {
-            if (_session is null) return;
-            if (IsSourceAlive(AppId)) return;
-            Log.Info("Media: source process is gone (" + AppId + ") - clearing state");
-            Detach();
-            ClearState();
-            Changed?.Invoke();
-        };
-        _livenessTimer.Start();
-    }
-
     void ClearState()
     {
         Title = Artist = Album = AppId = "";
         Art = null;
         PlaybackState = State.Stopped;
-        Position = TimeSpan.Zero;
-        Duration = TimeSpan.Zero;
-        _anchorAt = 0;
-        Rate = 1.0;
         CanPlayPause = CanNext = CanPrevious = CanSeek = false;
-        _positionKnown = false;
+        _tracker.Reanchor(TimeSpan.Zero, Environment.TickCount64, TimeSpan.Zero, known: false);
+        _tracker.SetPlayback(advancing: false, rate: 1.0, duration: TimeSpan.Zero, Environment.TickCount64);
+        _metadataKey = "";
+        _lastSessionLog = "";
     }
 
     // ── 事件 → UI 线程 ──────────────────────────────────────────────────
-    void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, object args)
-        => _ = ReadMetadataAsync();
+    void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, object args) => _ = ReadMetadataAsync();
 
     void OnPlaybackInfoChanged(GlobalSystemMediaTransportControlsSession sender, object args)
         => _dispatcher.BeginInvoke(new Action(() => { ReadPlaybackInfo(); Changed?.Invoke(); }));
@@ -261,31 +212,22 @@ internal sealed class MediaWatcher : IDisposable
     void OnTimelinePropertiesChanged(GlobalSystemMediaTransportControlsSession sender, object args)
         => _dispatcher.BeginInvoke(new Action(() => { ReadTimeline(); Changed?.Invoke(); }));
 
-    /// <summary>对外：强制读一次（卡片打开时用，保证进度新鲜）。</summary>
-    internal void Refresh()
-    {
-        ReadPlaybackInfo();
-        ReadTimeline();
-    }
-
+    internal void Refresh() { ReadPlaybackInfo(); ReadTimeline(); }
     internal void RefreshTimeline() => ReadTimeline();
 
-    // ── 读取：播放信息 ──────────────────────────────────────────────────
+    // ── 播放信息 ────────────────────────────────────────────────────────
     void ReadPlaybackInfo()
     {
         var session = _session;
         if (session is null) return;
         if (!IsSourceAlive(AppId)) return;
+
         try
         {
-            // 先把"到现在为止的推算值"落成锚点，再换状态，避免暂停/继续丢时间
-            Position = CurrentPosition;
-            _anchorAt = Environment.TickCount64;
-
             var info = session.GetPlaybackInfo();
             var status = info?.PlaybackStatus ?? GlobalSystemMediaTransportControlsSessionPlaybackStatus.Closed;
-            Rate = info?.PlaybackRate ?? 1.0;
-            if (Rate <= 0.01) Rate = 1.0;
+            double rate = info?.PlaybackRate ?? 1.0;
+            if (rate <= 0.01) rate = 1.0;
 
             var controls = info?.Controls;
             CanPlayPause = controls?.IsPlayPauseToggleEnabled ?? false;
@@ -293,13 +235,9 @@ internal sealed class MediaWatcher : IDisposable
             CanPrevious = controls?.IsPreviousEnabled ?? false;
             CanSeek = controls?.IsPlaybackPositionEnabled ?? false;
 
-            // 很多播放器（含网易云）根本不填这些开关：四个全 false 时按"未提供信息"处理，
-            // 否则按钮会被误判为不可用而点不动。实测网易云的 Try* 命令是可以工作的。
+            // 很多播放器（含网易云）不填这些开关：四个全 false 视为"未提供信息"，按可用处理
             if (!CanPlayPause && !CanNext && !CanPrevious && !CanSeek)
-            {
                 CanPlayPause = CanNext = CanPrevious = true;
-                Log.Info("Media: controls flags empty for " + AppId + " - assuming play/pause/next/prev enabled");
-            }
 
             var previousState = PlaybackState;
             PlaybackState = status switch
@@ -313,14 +251,14 @@ internal sealed class MediaWatcher : IDisposable
             };
             if (previousState != PlaybackState)
                 Log.Info($"Media: state {previousState} -> {PlaybackState} (status={status})");
+
+            bool advancing = PlaybackState is State.Playing or State.Buffering;
+            _tracker.SetPlayback(advancing, rate, Duration, Environment.TickCount64);
         }
-        catch (Exception)
-        {
-            // 会话随时可能消失
-        }
+        catch (Exception) { }
     }
 
-    // ── 读取：时间轴 ────────────────────────────────────────────────────
+    // ── 时间轴 ──────────────────────────────────────────────────────────
     void ReadTimeline()
     {
         var session = _session;
@@ -333,35 +271,22 @@ internal sealed class MediaWatcher : IDisposable
             bool zero = timeline.EndTime <= TimeSpan.Zero && timeline.Position <= TimeSpan.Zero;
             if (zero)
             {
-                // 网易云：时间轴恒为 0，用锚点 + 速率外推；真实时长由 lyrics 服务回填
-                _timelineIsReal = false;
-                if (_anchorAt == 0) _anchorAt = Environment.TickCount64;
+                // 网易云：时间轴恒为 0，靠 tracker 外推 + 换歌锚定
+                TimelineIsReal = false;
                 return;
             }
 
-            _timelineIsReal = true;
-            Position = timeline.Position;
+            TimelineIsReal = true;
             var span = timeline.EndTime - timeline.StartTime;
-            if (span > TimeSpan.Zero) Duration = span;
-            _anchorAt = Environment.TickCount64;
+            _tracker.Reanchor(timeline.Position, Environment.TickCount64,
+                              span > TimeSpan.Zero ? span : Duration, known: true);
         }
         catch (Exception) { }
     }
 
-    /// <summary>用外部来源（歌词接口）回填准确时长。</summary>
-    public void SetKnownDuration(TimeSpan duration)
-    {
-        if (duration > TimeSpan.Zero && Duration <= TimeSpan.Zero) Duration = duration;
-    }
-
-    /// <summary>时间轴是否是 SMTC 真值（false 表示靠外推）。</summary>
-    public bool TimelineIsReal => _timelineIsReal;
-
-    // ── 读取：元数据（整体替换 + 封面缓存）─────────────────────────────
+    // ── 元数据 ──────────────────────────────────────────────────────────
     string _metadataKey = "";
     string loggedKey = "";
-    string _lastSessionLog = "";
-    bool _sawSongChange;
     bool _firstMetadataApplied;
 
     async Task ReadMetadataAsync()
@@ -377,8 +302,6 @@ internal sealed class MediaWatcher : IDisposable
             string artist = string.IsNullOrWhiteSpace(props.Artist) ? props.AlbumArtist ?? "" : props.Artist;
             string album = props.AlbumTitle ?? "";
 
-            // 加载中/版权受限时字段可能为空：此时保留上一次的完整元数据，等下一次读取，
-            // 避免出现"新歌名 + 旧歌手"这种中间态。
             if (!MediaRules.ShouldApplyMetadata(title))
             {
                 Log.Info("Media: metadata empty (loading / VIP / copyright?), keeping previous");
@@ -386,25 +309,25 @@ internal sealed class MediaWatcher : IDisposable
                 return;
             }
 
-            // 换歌：位置归零（或用落盘续算），时长清空等回填
-            if (!string.Equals(_metadataKey, title + "|" + artist + "|" + album, StringComparison.Ordinal))
+            string key = title + "|" + artist + "|" + album;
+            bool songChanged = !string.Equals(_metadataKey, key, StringComparison.Ordinal);
+            if (songChanged)
             {
-                _metadataKey = title + "|" + artist + "|" + album;
+                _metadataKey = key;
                 var resumed = MediaPositionStore.TryResume(title, artist, Duration);
-                Position = resumed ?? TimeSpan.Zero;
-                _anchorAt = Environment.TickCount64;
-                if (resumed is null) Duration = TimeSpan.Zero;
-                // 亲眼看到换歌 → 位置从 0 开始，可信；有落盘续算也可信；首次拿到元数据（可能已播一半）仍不可信
-                _positionKnown = MediaRules.IsPositionKnown(_timelineIsReal, resumed is not null, _firstMetadataApplied);
+                bool known = MediaRules.IsPositionKnown(TimelineIsReal, resumed is not null, _firstMetadataApplied);
+                _tracker.Reanchor(resumed ?? TimeSpan.Zero, Environment.TickCount64,
+                                  resumed is null ? TimeSpan.Zero : Duration, known);
                 _firstMetadataApplied = true;
             }
 
-            var art = await LoadArtCachedAsync(_metadataKey, props.Thumbnail);
-            // 调试开关：想验证"没有封面时的占位表现"时，把 MACDOCK_FORCE_NOART=1 设进环境变量即可
-            if (Environment.GetEnvironmentVariable("MACDOCK_FORCE_NOART") == "1") art = null;
-            bool isNewSong = !string.Equals(loggedKey, _metadataKey, StringComparison.Ordinal);
-            if (isNewSong) Log.Info($"Media: song '{title}' - {artist} (album='{album}' art={(art is null ? "no" : "yes")})");
-            loggedKey = _metadataKey;
+            var art = await LoadArtCachedAsync(key, props.Thumbnail);
+
+            if (songChanged && !string.Equals(loggedKey, key, StringComparison.Ordinal))
+            {
+                loggedKey = key;
+                Log.Info($"Media: song '{title}' - {artist} (album='{album}' art={(art is null ? "no" : "yes")})");
+            }
 
             _dispatcher.BeginInvoke(new Action(() =>
             {
@@ -416,10 +339,7 @@ internal sealed class MediaWatcher : IDisposable
                 Changed?.Invoke();
             }));
         }
-        catch (Exception)
-        {
-            // 会话消失 / VIP 试听等场景读失败：静默，等下一次事件
-        }
+        catch (Exception) { }
     }
 
     static async Task<BitmapSource?> LoadArtCachedAsync(string key, IRandomAccessStreamReference? reference)
@@ -448,7 +368,7 @@ internal sealed class MediaWatcher : IDisposable
             catch (Exception) { }
         }
 
-        if (ArtCache.Count > 120) ArtCache.Clear();   // 简单封顶，别无限涨
+        if (ArtCache.Count > 120) ArtCache.Clear();
         ArtCache[key] = bitmap;
         return bitmap;
     }
@@ -456,41 +376,35 @@ internal sealed class MediaWatcher : IDisposable
     // ── 控制：先查可用性，命令后回读 ────────────────────────────────────
     public void PlayPause()
     {
-        if (!CanPlayPause) return;
+        if (!CanPlayPause) { Log.Info("MediaCommand: PlayPause suppressed (control disabled)"); return; }
         Fire(s => s.TryTogglePlayPauseAsync(), "TogglePlayPause");
     }
 
     public void Next()
     {
-        if (!CanNext) return;
+        if (!CanNext) { Log.Info("MediaCommand: Next suppressed (control disabled)"); return; }
         Fire(s => s.TrySkipNextAsync(), "SkipNext");
     }
 
     public void Previous()
     {
-        if (!CanPrevious) return;
+        if (!CanPrevious) { Log.Info("MediaCommand: Previous suppressed (control disabled)"); return; }
         Fire(s => s.TrySkipPreviousAsync(), "SkipPrevious");
     }
 
     public void Seek(TimeSpan position)
     {
-        if (!CanSeek) return;
-        if (Duration > TimeSpan.Zero && position > Duration) position = Duration;
-        if (position < TimeSpan.Zero) position = TimeSpan.Zero;
-
+        if (!CanSeek) { Log.Info("MediaCommand: Seek suppressed (control disabled)"); return; }
         var session = _session;
         if (session is null) return;
+        if (Duration > TimeSpan.Zero && position > Duration) position = Duration;
+        if (position < TimeSpan.Zero) position = TimeSpan.Zero;
         try
         {
             _ = RunCommand(session.TryChangePlaybackPositionAsync(position.Ticks), "Seek");
-            // 本地立即对齐，回读会再校正
-            Position = position;
-            _anchorAt = Environment.TickCount64;
+            _tracker.Reanchor(position, Environment.TickCount64, Duration, known: true);
         }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Seeking");
-        }
+        catch (Exception ex) { Log.Error(ex, "Seeking"); }
     }
 
     void Fire(Func<GlobalSystemMediaTransportControlsSession, object> action, string name)
@@ -507,14 +421,10 @@ internal sealed class MediaWatcher : IDisposable
         {
             if (pending is Windows.Foundation.IAsyncOperation<bool> operation) await operation;
         }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Sending media command " + name);
-        }
+        catch (Exception ex) { Log.Error(ex, "Sending media command " + name); }
         await RefreshAfterCommandAsync(name);
     }
 
-    /// <summary>命令后回读真实状态（两次，覆盖应用回执慢的情况）。</summary>
     async Task RefreshAfterCommandAsync(string name)
     {
         foreach (int delay in new[] { 120, 450 })
@@ -530,23 +440,11 @@ internal sealed class MediaWatcher : IDisposable
         }
     }
 
-    public void PersistPosition()
-    {
-        if (string.IsNullOrWhiteSpace(Title)) return;
-        MediaPositionStore.Save(Title, Artist, CurrentPosition, IsPlaying);
-    }
-
-    long _ceilingSinceMs;
-    int _noSessionTicks;        // 连续多少秒没有会话
-    long _lastSelfHealMs;       // 上次自愈时间（节流）
-
-
+    // ── 看门狗：位置循环检测 / 会话存活 / 自愈 ──────────────────────────
     System.Windows.Threading.DispatcherTimer? _positionTimer;
+    int _noSessionTicks;
+    long _lastSelfHealMs;
 
-    /// <summary>
-    /// 单曲循环检测：网易云的时间轴恒为 0、也没有"换歌"事件（同一首歌重播），
-    /// 所以外推会一直停在天花板上。这里每秒看一眼，贴天花板超过 1.5 秒仍在播放就当归零重来。
-    /// </summary>
     void StartPositionWatch()
     {
         if (_positionTimer is not null) return;
@@ -555,15 +453,12 @@ internal sealed class MediaWatcher : IDisposable
         {
             if (_session is null)
             {
-                // 会话空了：可能是应用刚退出（正常），也可能是睡眠唤醒后 SMTC 管理器失效（需要重建）。
-                // 每 10 秒试一次重建，最多每 30 秒一次，避免频繁请求。
-                _ceilingSinceMs = 0;
                 _noSessionTicks++;
-                var tickNow = Environment.TickCount64;
-                if (_noSessionTicks >= 10 && tickNow - _lastSelfHealMs > 30_000)
+                var now = Environment.TickCount64;
+                if (_noSessionTicks >= 10 && now - _lastSelfHealMs > 30_000)
                 {
                     _noSessionTicks = 0;
-                    _lastSelfHealMs = tickNow;
+                    _lastSelfHealMs = now;
                     Log.Info("Media: no session for a while - re-initializing SMTC manager");
                     Restart();
                 }
@@ -571,25 +466,41 @@ internal sealed class MediaWatcher : IDisposable
             }
             _noSessionTicks = 0;
 
-            if (!_positionKnown || Duration <= TimeSpan.Zero) { _ceilingSinceMs = 0; return; }
-            if (PlaybackState != State.Playing) { _ceilingSinceMs = 0; return; }
-
-            var now = Environment.TickCount64;
-            var position = CurrentPosition;
-            if (!MediaRules.IsAtCeiling(position, Duration)) { _ceilingSinceMs = 0; return; }
-
-            if (_ceilingSinceMs == 0) { _ceilingSinceMs = now; return; }
-            if (!MediaRules.ShouldRestartLoop(_ceilingSinceMs, now)) return;
-
-            Log.Info($"Media: single-track loop detected - rewinding anchor (was {position.TotalSeconds:F0}s of {Duration.TotalSeconds:F0}s)");
-            Position = TimeSpan.Zero;
-            _anchorAt = now;
-            _ceilingSinceMs = 0;
-            Changed?.Invoke();
+            if (_tracker.Tick(Environment.TickCount64))
+            {
+                Log.Info($"Media: single-track loop detected - rewound (loop #{_tracker.LoopRewinds})");
+                Changed?.Invoke();
+            }
         };
         _positionTimer.Start();
     }
 
+    static bool IsSourceAlive(string aumid)
+        => MediaRules.IsSourceAlive(aumid, name =>
+        {
+            try { return System.Diagnostics.Process.GetProcessesByName(name).Length > 0; }
+            catch (Exception) { return true; }
+        });
+
+    System.Windows.Threading.DispatcherTimer? _livenessTimer;
+
+    void StartLivenessWatch()
+    {
+        if (_livenessTimer is not null) return;
+        _livenessTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _livenessTimer.Tick += (_, _) =>
+        {
+            if (_session is null) return;
+            if (IsSourceAlive(AppId)) return;
+            Log.Info("Media: source process is gone (" + AppId + ") - clearing state");
+            Detach();
+            ClearState();
+            Changed?.Invoke();
+        };
+        _livenessTimer.Start();
+    }
+
+    // ── 位置落盘（重启续算）───────────────────────────────────────────
     System.Windows.Threading.DispatcherTimer? _persistTimer;
 
     public void StartPersistence()
@@ -600,10 +511,17 @@ internal sealed class MediaWatcher : IDisposable
         _persistTimer.Start();
     }
 
+    public void PersistPosition()
+    {
+        if (string.IsNullOrWhiteSpace(Title)) return;
+        MediaPositionStore.Save(Title, Artist, CurrentPosition, IsPlaying);
+    }
+
     public void Dispose()
     {
         _persistTimer?.Stop();
         _positionTimer?.Stop();
+        _livenessTimer?.Stop();
         _disposed = true;
         Detach();
         _manager = null;
