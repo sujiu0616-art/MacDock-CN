@@ -23,6 +23,7 @@ internal sealed class TaskbarReplacer : IDisposable
     bool _guardStarting;
     DateTime _nextGuardAttempt;
     bool _disposed;
+    bool _enforcing;   // 后台 Enforce 正在跑（避免叠跑）
 
     public TaskbarReplacer(bool enabled)
     {
@@ -30,7 +31,19 @@ internal sealed class TaskbarReplacer : IDisposable
         _winEventProc = OnWinEvent;
         // Safety net for shows the event hook misses (and for a guard that died).
         _enforceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _enforceTimer.Tick += (_, _) => Enforce();
+        // Enforce 会拿互斥体、还会调 SHAppBarMessage（同步进 Explorer）：
+        // 绝不能放在 UI 线程上做 —— 它会和 Explorer 的 appbar 回调互相等，把整个 shell 拖住。
+        _enforceTimer.Tick += (_, _) =>
+        {
+            if (_enforcing) return;
+            _enforcing = true;
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                try { Enforce(); }
+                catch (Exception ex) { Log.Error(ex, "Enforcing the taskbar state"); }
+                finally { _enforcing = false; }
+            });
+        };
     }
 
     /// <summary>The "replace the taskbar" option.</summary>

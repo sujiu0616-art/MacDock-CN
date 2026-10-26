@@ -43,7 +43,9 @@ internal sealed class WindowTracker : IDisposable
         _shellHookMessage = RegisterWindowMessage("SHELLHOOK");
         RegisterShellHookWindow(hwnd);
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+    // 80ms 太激进：Refresh() 会枚举所有窗口（每个窗口 4~5 个 API 调用），12.5 次/秒全压在 UI 线程上。
+    // 窗口增减其实有 WinEvent 钩子兜着，这个定时器只是兜底 —— 400ms 足够，UI 线程压力降到 1/5。
+    _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _refreshTimer.Tick += (_, _) =>
         {
             _refreshTimer.Stop();

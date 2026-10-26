@@ -107,6 +107,21 @@ internal sealed class DockWindow : Window
     string _displayLayout = "";
     readonly DispatcherTimer _displayCheck = new() { Interval = TimeSpan.FromSeconds(1) };
     /// <summary>全屏检测心跳：任务栏被隐藏后 Explorer 的 ABN_FULLSCREENAPP 不可靠，自己每 120ms 看一眼。</summary>
+    bool _compacting;
+
+    /// <summary>强制紧凑 GC 会阻塞调用线程 100~500ms，绝不能放在 UI 线程上（Explorer 会跟着等）。</summary>
+    void CompactInBackground()
+    {
+        if (_compacting) return;
+        _compacting = true;
+        _ = Task.Run(() =>
+        {
+            try { Core.Memory.Compact(); }
+            catch (Exception ex) { Log.Error(ex, "Compacting memory"); }
+            finally { _compacting = false; }
+        });
+    }
+
     DateTime _lastStripSweep = DateTime.MinValue;   // 上次全盘扫描时间（~2 秒一次）
     bool _stripSweeping;   // 后台全盘扫描进行中（避免叠跑）
 
@@ -258,6 +273,7 @@ internal sealed class DockWindow : Window
             CheckStuckTaskSwitcher();
         };
         UiWatchdog.Start(Dispatcher);
+        InteractionWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
 
         // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
@@ -271,7 +287,7 @@ internal sealed class DockWindow : Window
         StripGuard.RepairWronglyHidden();
         Dispatcher.BeginInvoke(new Action(StripGuard.Sweep), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         // 启动把图标都解完之后做一次紧凑 GC + trim
-        Dispatcher.BeginInvoke(new Action(() => Core.Memory.Compact()),
+        Dispatcher.BeginInvoke(new Action(CompactInBackground),
             System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         if (Environment.GetCommandLineArgs().Contains("--menu"))
             Dispatcher.BeginInvoke(new Action(PreviewMenuForDiagnostics), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -478,7 +494,7 @@ internal sealed class DockWindow : Window
                 _backdrop?.SetVisible(true);
                 SchedulePlace();
                 // 启动台一关就把 77 个图标位图早点还掉（实测从 214MB 回落到 120MB 私有内存）
-                Dispatcher.BeginInvoke(new Action(Core.Memory.Compact), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Dispatcher.BeginInvoke(new Action(CompactInBackground), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             }
         }
         catch (Exception ex)
@@ -2241,7 +2257,7 @@ internal sealed class DockWindow : Window
         if (pid == Environment.ProcessId) return false;
         try
         {
-            string owner = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+            string owner = ProcessNameOf(pid);
             if (OemNoise.Contains(owner)) return false;
             if (owner is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
                 or "SearchHost" or "SearchApp" or "ShellHost" or "LockApp" or "TextInputHost") return false;
@@ -2262,6 +2278,31 @@ internal sealed class DockWindow : Window
     /// 由 Explorer 的 ABN_FULLSCREENAPP 或我们自己的检测（见 <see cref="DetectFullscreenApp"/>）驱动 ——
     /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
     /// <summary>这些进程的"全屏"窗口是厂商工具/通知弹窗，不是应用全屏。</summary>
+    /// <summary>
+    /// pid → 进程名，带 1 秒缓存。全屏检测每 120ms 跑一次，之前每次都 Process.GetProcessById
+    /// （每秒 ~25 次开句柄），系统忙的时候会明显拖慢 UI 线程。
+    /// </summary>
+    static readonly System.Collections.Generic.Dictionary<uint, (string Name, long At)> _processNames = new();
+    static readonly object _processNamesGate = new();
+
+    static string ProcessNameOf(uint pid)
+    {
+        long now = Environment.TickCount64;
+        lock (_processNamesGate)
+        {
+            if (_processNames.TryGetValue(pid, out var cached) && now - cached.At < 1000) return cached.Name;
+        }
+        string name;
+        try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; }
+        catch (Exception) { name = "?"; }
+        lock (_processNamesGate)
+        {
+            if (_processNames.Count > 256) _processNames.Clear();
+            _processNames[pid] = (name, now);
+        }
+        return name;
+    }
+
     static readonly System.Collections.Generic.HashSet<string> OemNoise = new(StringComparer.OrdinalIgnoreCase)
     {
         "LenovoPcManager", "LenovoTray", "LenovoVantage", "LenovoVantageService", "SmartEngineHost",
@@ -2375,7 +2416,7 @@ internal sealed class DockWindow : Window
             GetWindowThreadProcessId(foreground, out uint pid);
 
             string process = "?";
-            try { process = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch (Exception) { }
+            process = ProcessNameOf(pid);
             var titleBuffer = new System.Text.StringBuilder(256);
             _ = GetWindowText(foreground, titleBuffer, titleBuffer.Capacity);
             string title = titleBuffer.ToString();
@@ -2402,7 +2443,7 @@ internal sealed class DockWindow : Window
         try
         {
             GetWindowThreadProcessId(foreground, out uint shellPid);
-            string shellProcess = System.Diagnostics.Process.GetProcessById((int)shellPid).ProcessName;
+            string shellProcess = ProcessNameOf(shellPid);
             if (shellProcess is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
                 or "SearchHost" or "SearchApp" or "ShellHost" or "LockApp" or "TextInputHost") return false;
         }

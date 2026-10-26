@@ -437,7 +437,9 @@ internal static class TaskbarState
         bool owned;
         try
         {
-            owned = mutex.WaitOne(TimeSpan.FromSeconds(5));
+            // 300ms 就够：拿不到说明别人正在改任务栏状态，这一轮跳过就行。
+            // 原来是 5 秒，而调用方（Enforce）在 UI 线程上 —— 一旦 guard 持锁，整个 shell 会被拖住。
+            owned = mutex.WaitOne(TimeSpan.FromMilliseconds(300));
         }
         catch (AbandonedMutexException)
         {
