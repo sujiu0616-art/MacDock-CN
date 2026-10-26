@@ -2178,6 +2178,9 @@ internal sealed class DockWindow : Window
     }
 
     long _switchOverlaySeenAt;
+    IntPtr _fullscreenOwner;        // 已认定全屏的窗口（粘性判定用）
+    long _otherForegroundSince;     // 另一个真实应用窗口成为前台的时间
+
     readonly System.Collections.Generic.List<long> _fullscreenToggles = new();   // 防抖振
     long _fullscreenSuspendUntil;
 
@@ -2394,6 +2397,29 @@ internal sealed class DockWindow : Window
     /// 结构性"全屏"判据：窗口压进菜单栏那条与 Dock 那条各一半以上。
     /// 最大化窗口刚好停在这两条之外，一定不合格；留几像素边的真全屏合格。
     /// </summary>
+    /// <summary>
+    /// 是不是"另一个应用的真实窗口"（判断用户是否主动切走了全屏应用）。
+    /// 通知气泡、输入法、托盘弹窗、shell 自身窗口都不算。
+    /// </summary>
+    bool IsOtherAppWindow(IntPtr hwnd)
+    {
+        var root = GetAncestor(hwnd, 2 /* GA_ROOT */);
+        if (root == IntPtr.Zero || root == _fullscreenOwner) return false;
+        if (!IsWindowVisible(root) || IsIconic(root)) return false;
+        if (GetWindowTextLength(root) == 0) return false;
+
+        GetWindowThreadProcessId(root, out uint pid);
+        if (pid == Environment.ProcessId) return false;
+        string name = ProcessNameOf(pid);
+        if (name is "explorer" or "ShellExperienceHost" or "StartMenuExperienceHost"
+            or "SearchHost" or "SearchApp" or "ShellHost" or "LockApp" or "TextInputHost"
+            || OemNoise.Contains(name)) return false;
+
+        long ex = (long)GetWindowLongPtr(root, GWL_EXSTYLE);
+        if ((ex & WS_EX_TOOLWINDOW) != 0) return false;
+        return GetWindowRect(root, out var r) && r.Width > 200 && r.Height > 150;
+    }
+
     static bool IsFullscreenRect(RECT rect, RECT bounds, RECT work)
     {
         int topStrip = Math.Max(1, work.Top - bounds.Top);        // 菜单栏那条（39px @150%）
@@ -2434,6 +2460,44 @@ internal sealed class DockWindow : Window
     bool DetectFullscreenApp()
     {
         var foreground = GetForegroundWindow();
+
+        // 粘性：已认定全屏的窗口还在、还铺满 → 保持全屏，完全不看当前前台是谁
+        // （通知/托盘气泡/微信消息抢一下前台就弹 Dock 的毛病就是这么来的）
+        if (_fullscreenOwner != IntPtr.Zero)
+        {
+            bool stillFullscreen = IsWindow(_fullscreenOwner)
+                                   && IsWindowVisible(_fullscreenOwner)
+                                   && !IsIconic(_fullscreenOwner)
+                                   && GetWindowRect(_fullscreenOwner, out var ownerRect)
+                                   && IsFullscreenRect(ownerRect, CurrentDisplay().Bounds, CurrentDisplay().Work);
+
+            if (stillFullscreen)
+            {
+                if (foreground != IntPtr.Zero && foreground != _fullscreenOwner && IsOtherAppWindow(foreground))
+                {
+                    if (_otherForegroundSince == 0) _otherForegroundSince = Environment.TickCount64;
+                    else if (Environment.TickCount64 - _otherForegroundSince >= 1000) _fullscreenOwner = IntPtr.Zero;
+                }
+                else
+                {
+                    _otherForegroundSince = 0;
+                }
+
+                if (_fullscreenOwner != IntPtr.Zero)
+                {
+                    // 只有前台真的换成别的应用窗口时才值得记一笔（通知/气泡属于常态噪音）
+                    if (_otherForegroundSince != 0)
+                        Log.Info($"Fullscreen: kept (owner still fullscreen, foreground is {ProcessNameOf(GetWindowThreadProcessId(foreground, out _))})");
+                    return true;
+                }
+            }
+            else
+            {
+                _fullscreenOwner = IntPtr.Zero;
+                _otherForegroundSince = 0;
+            }
+        }
+
         if (foreground == IntPtr.Zero) return false;
         if (IsIconic(foreground)) return false;
         var className = GetClassName(foreground);
@@ -2479,7 +2543,9 @@ internal sealed class DockWindow : Window
         if (IsMaximized(foreground) && !IsFullscreenRect(rect, bounds, display.Work)) return false;
 
         // 结构性判据：压进"菜单栏那条"与"Dock 那条"各一半以上才算全屏
-        return IsFullscreenRect(rect, bounds, display.Work);
+        bool fullscreen = IsFullscreenRect(rect, bounds, display.Work);
+        if (fullscreen) _fullscreenOwner = GetAncestor(foreground, 2 /* GA_ROOT */);
+        return fullscreen;
     }
 
     /// <summary>--menu：在固定位置弹一个样例菜单（只用于截图验收外观）。</summary>
