@@ -20,7 +20,11 @@ internal sealed class MediaWatcher : IDisposable
     readonly NetEaseClock _clock = new();     // 网易云内部播放时钟（内存只读），SMTC 无时间轴时用它
     bool _clockLogged;
     long _songChangedAtMs;
+    long _lastPosLogMs;
     double _lastNativeSeconds = -1;
+    long _lastNativeAtMs;
+    int _irregularCount;
+    long _irregularSinceMs;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
     GlobalSystemMediaTransportControlsSession? _session;
     bool _disposed;
@@ -514,18 +518,44 @@ internal sealed class MediaWatcher : IDisposable
                         _clock.Invalidate();
                         return;
                     }
-                    if (nativeSeconds >= _lastNativeSeconds - 3 || nativeSeconds < 3)
+                    // 任何跳变都先跟随（拖动进度条 / 换歌 / 重播都是"跳到新位置"）
+                    long nowTick = Environment.TickCount64;
+                    double dt = _lastNativeAtMs == 0 ? 0 : (nowTick - _lastNativeAtMs) / 1000.0;
+                    if (_lastNativeSeconds >= 0 && dt > 0)
                     {
-                        if (!_clockLogged)
+                        double dv = nativeSeconds - _lastNativeSeconds;
+                        bool irregular = Math.Abs(dv - dt) > 1.0;      // 正常应该 dv ≈ dt
+                        if (irregular)
                         {
-                            _clockLogged = true;
-                            Log.Info($"Media: native clock active (pid={_clock.ProcessId} addr=0x{_clock.Address:X})");
+                            if (nowTick - _irregularSinceMs > 10_000) { _irregularSinceMs = nowTick; _irregularCount = 0; }
+                            _irregularCount++;
+                            Log.Info($"Media: clock jump {_lastNativeSeconds:F1}s -> {nativeSeconds:F1}s (dt={dt:F2}s, irregular #{_irregularCount})");
+                            if (_irregularCount >= 3)
+                            {
+                                Log.Info("Media: clock keeps jumping irregularly - dropping address and rescanning");
+                                _clock.Invalidate();
+                                _irregularCount = 0;
+                                return;
+                            }
                         }
-                        _lastNativeSeconds = nativeSeconds;
-                        _tracker.Reanchor(TimeSpan.FromSeconds(nativeSeconds), Environment.TickCount64,
-                                          Duration, known: true);
                     }
+                    if (!_clockLogged)
+                    {
+                        _clockLogged = true;
+                        Log.Info($"Media: native clock active (pid={_clock.ProcessId} addr=0x{_clock.Address:X})");
+                    }
+                    _lastNativeSeconds = nativeSeconds;
+                    _lastNativeAtMs = nowTick;
+                    _tracker.Reanchor(TimeSpan.FromSeconds(nativeSeconds), nowTick, Duration, known: true);
                 }
+            }
+
+            // 诊断：每 5 秒把"内存时钟 / 面板显示"打一条，便于对齐排错
+            if (Environment.TickCount64 - _lastPosLogMs > 5000)
+            {
+                _lastPosLogMs = Environment.TickCount64;
+                double clockNow = -1; try { _clock.TryGetSeconds(out clockNow); } catch (Exception) { }
+                Log.Info($"Media: pos clock={clockNow:F1}s ui={CurrentPosition.TotalSeconds:F1}s state={PlaybackState} ready={_clock.IsReady} dur={Duration.TotalSeconds:F0}s");
             }
 
             if (_tracker.Tick(Environment.TickCount64))
