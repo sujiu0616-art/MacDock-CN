@@ -50,6 +50,8 @@ internal sealed class MenuBarWindow : Window
     TextBlock? _capsuleText;
     TextBlock? _capsuleIcon;
     System.Windows.Shapes.Ellipse? _capsuleArt;
+    Grid? _capsuleViewport;
+    TranslateTransform? _capsuleShift;
     MediaWatcher? _media;
 
     void EnsureMediaWatcher()
@@ -81,11 +83,64 @@ internal sealed class MenuBarWindow : Window
         }
         if (_capsuleIcon is not null)
             _capsuleIcon.Opacity = playing ? 1.0 : 0.45;
-        if (_capsule is not null)
+        if (_capsule is not null) _capsule.Visibility = Visibility.Visible;
+        FitCapsule(playing);
+    }
+
+    /// <summary>
+    /// 胶囊宽度：按文字实际宽度自适应（最多 300px）；超过上限就让它滚动而不是截断。
+    /// </summary>
+    void FitCapsule(bool playing)
+    {
+        if (_capsule is null || _capsuleText is null || _capsuleViewport is null) return;
+
+        const double MaxCapsule = 300;
+        const double Padding = 22;          // 左右内边距
+        double artWidth = _capsuleArt is not null && _capsuleArt.Width > 0 ? _capsuleArt.Width + _capsuleArt.Margin.Right : 0;
+
+        if (!playing)
         {
-            _capsule.Visibility = Visibility.Visible;   // 空闲时也在，用户点得到
-            _capsule.Width = playing ? 196 : 44;        // 没在播放就是个小胶囊
+            StopMarquee();
+            _capsuleViewport.Width = 0;
+            _capsule.Width = 44;
+            return;
         }
+
+        _capsuleText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        double textWidth = _capsuleText.DesiredSize.Width;
+        double maxViewport = MaxCapsule - artWidth - Padding;
+        double viewport = Math.Min(textWidth, maxViewport);
+
+        _capsuleViewport.Width = viewport;
+        _capsule.Width = viewport + artWidth + Padding;
+
+        if (textWidth > viewport + 2) StartMarquee(textWidth - viewport);
+        else StopMarquee();
+    }
+
+    /// <summary>左右来回滚动（28px/s）；只在溢出时运行。</summary>
+    void StartMarquee(double overflow)
+    {
+        if (_capsuleShift is null) return;
+        double seconds = Math.Max(1.2, overflow / 28.0);
+        var animation = new System.Windows.Media.Animation.DoubleAnimation
+        {
+            From = 0,
+            To = -overflow,
+            Duration = new Duration(TimeSpan.FromSeconds(seconds)),
+            BeginTime = TimeSpan.FromSeconds(0.9),
+            AutoReverse = true,
+            RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+            EasingFunction = new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut },
+        };
+        _capsuleShift.BeginAnimation(TranslateTransform.XProperty, animation, System.Windows.Media.Animation.HandoffBehavior.SnapshotAndReplace);
+    }
+
+    void StopMarquee()
+    {
+        if (_capsuleShift is null) return;
+        _capsuleShift.BeginAnimation(TranslateTransform.XProperty, null);
+        _capsuleShift.X = 0;
     }
 
     void UpdateCapsuleLook(bool hover)
@@ -220,8 +275,8 @@ internal sealed class MenuBarWindow : Window
             FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 148,
+            TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.None,   // 溢出靠滚动，不截断
         };
         _capsule = new Border
         {
@@ -241,7 +296,13 @@ internal sealed class MenuBarWindow : Window
                         VerticalAlignment = VerticalAlignment.Center,
                         Fill = new ImageBrush { Stretch = Stretch.UniformToFill },
                     }),
-                    _capsuleText,
+                    // 裁剪容器：文字超出可视宽度时在它里面滚动
+                    (_capsuleViewport = new Grid
+                    {
+                        ClipToBounds = true,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        RenderTransform = (_capsuleShift = new TranslateTransform(0, 0)),
+                    }),
                 },
             },
             Width = 92,
@@ -254,6 +315,7 @@ internal sealed class MenuBarWindow : Window
             BorderThickness = new Thickness(1),
             BorderBrush = Brushes.Transparent,
         };
+        _capsuleViewport!.Children.Add(_capsuleText);
         _capsule.MouseLeftButtonUp += (_, _) => ToggleIsland();
         _capsule.MouseEnter += (_, _) => UpdateCapsuleLook(hover: true);
         _capsule.MouseLeave += (_, _) => UpdateCapsuleLook(hover: false);

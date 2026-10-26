@@ -43,6 +43,7 @@ internal sealed class IslandWindow : Window
     bool _fetchingLyrics;
     int _lyricOffsetMs;
     bool _pointerInside;
+    bool? _optimisticPlaying;
 
     public static bool IsOpen => _open is not null;
 
@@ -101,7 +102,13 @@ internal sealed class IslandWindow : Window
         // ── 按钮 ───────────────────────────────────────────────────────────
         _buttons = new ButtonRow { VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         var prev = GlyphButton("M11,1 L2.6,6 L11,11 Z M0.4,1 L1.8,1 L1.8,11 L0.4,11 Z", () => _media?.Previous());
-        var play = GlyphButton(PlayGeometry, () => _media?.PlayPause());
+        var play = GlyphButton(PlayGeometry, () =>
+        {
+            // 乐观更新：先把图标切过去，事件回来再对齐（网易云的命令回执常有几百毫秒）
+            _optimisticPlaying = !(_media?.IsPlaying ?? false);
+            _playGlyph.Data = Geometry.Parse((_optimisticPlaying == true) ? PauseGeometry : PlayGeometry);
+            _media?.PlayPause();
+        });
         var next = GlyphButton("M1,1 L9.4,6 L1,11 Z M10.2,1 L11.6,1 L11.6,11 L10.2,11 Z", () => _media?.Next());
         _buttons.Children.Add(prev);
         _buttons.Children.Add(play);
@@ -244,6 +251,12 @@ internal sealed class IslandWindow : Window
         _playGlyph.Fill = _title.Foreground;
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern int SetWindowLong(IntPtr hwnd, int index, int value);
+
     static Brush Frozen(Color c)
     {
         var b = new SolidColorBrush(c);
@@ -316,7 +329,9 @@ internal sealed class IslandWindow : Window
         _artist.Text = media.Artist;
         _art.Source = media.Art;
         _art.Visibility = media.Art is null ? Visibility.Hidden : Visibility.Visible;
-        _playGlyph.Data = Geometry.Parse(media.IsPlaying ? PauseGeometry : PlayGeometry);
+        bool playing = _optimisticPlaying ?? media.IsPlaying;
+        if (_optimisticPlaying is not null && _optimisticPlaying == media.IsPlaying) _optimisticPlaying = null;
+        _playGlyph.Data = Geometry.Parse(playing ? PauseGeometry : PlayGeometry);
         UpdateProgressAndLyric();
         StartLyricsFetch(media.Title, media.Artist);
     }

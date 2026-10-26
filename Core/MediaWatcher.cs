@@ -209,21 +209,49 @@ internal sealed class MediaWatcher : IDisposable
     }
 
     // ── 控制（都是一次性调用，不轮询）────────────────────────────────────
-    public void PlayPause() => Fire(s => s.TryTogglePlayPauseAsync());
-    public void Next() => Fire(s => s.TrySkipNextAsync());
-    public void Previous() => Fire(s => s.TrySkipPreviousAsync());
+    public void PlayPause() => Fire(s => s.TryTogglePlayPauseAsync(), "TogglePlayPause");
+    public void Next() => Fire(s => s.TrySkipNextAsync(), "SkipNext");
+    public void Previous() => Fire(s => s.TrySkipPreviousAsync(), "SkipPrevious");
 
-    void Fire(Func<GlobalSystemMediaTransportControlsSession, object> action)
+    void Fire(Func<GlobalSystemMediaTransportControlsSession, object> action, string name = "")
     {
         try
         {
             var session = _session;
             if (session is null) return;
-            _ = action(session);
+            _ = RunCommand(action(session), name);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Sending a media command");
+        }
+    }
+
+    /// <summary>命令耗时诊断：网易云的 SMTC 命令如果本身很慢，UI 就必须先乐观更新。</summary>
+    async Task RunCommand(object pending, string name)
+    {
+        try
+        {
+            if (pending is Windows.Foundation.IAsyncOperation<bool> operation) await operation;
+        }
+        catch (Exception ex) { Log.Error(ex, "Sending media command " + name); }
+
+        // 命令本身是 0~1ms 就返回的（实测），真正的延迟在网易云的状态/元数据事件上：
+        // 所以命令结束后主动补两次刷新，别让界面干等事件。
+        _ = RefreshSoonAsync();
+    }
+
+    async Task RefreshSoonAsync()
+    {
+        foreach (int delay in new[] { 150, 500 })
+        {
+            await Task.Delay(delay);
+            _dispatcher.BeginInvoke(new Action(() =>
+            {
+                ReadPlaybackState();
+                _ = ReadMediaPropertiesAsync();
+                Changed?.Invoke();
+            }));
         }
     }
 
