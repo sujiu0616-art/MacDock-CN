@@ -157,6 +157,7 @@ internal sealed class NetEaseBridge : IDisposable
     static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
     const byte VK_CONTROL = 0x11;
+    const byte VK_MENU = 0x12;      // Alt：网易云的"喜欢歌曲"全局热键是 Ctrl + Alt + L
     const byte VK_L = 0x4C;
     const uint KEYUP = 0x0002;
 
@@ -174,6 +175,7 @@ internal sealed class NetEaseBridge : IDisposable
             Thread.Sleep(30);
             keybd_event(VK_L, 0, KEYUP, UIntPtr.Zero);
             Thread.Sleep(30);
+            keybd_event(VK_MENU, 0, KEYUP, UIntPtr.Zero);
             keybd_event(VK_CONTROL, 0, KEYUP, UIntPtr.Zero);
             return true;
         }
@@ -191,7 +193,7 @@ internal sealed class NetEaseBridge : IDisposable
         // 1) 热键（首选：无依赖、不断播）
         if (TryHotkeyLike())
         {
-            Log.Info("Bridge: like sent via Ctrl+L hotkey");
+            Log.Info("Bridge: like sent via Ctrl+Alt+L (global hotkey)");
             return true;
         }
         return false;
