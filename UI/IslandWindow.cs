@@ -142,12 +142,16 @@ internal sealed class IslandWindow : Window
         _buttons.Children.Add(next);
         _playGlyph = (System.Windows.Shapes.Path)((Border)play).Child;
 
-        var top = new Grid();
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        // 内容整体居中：封面+文字，然后按钮，中间留固定间距（不再左一块右一块）
+        _buttons.Margin = new Thickness(18, 0, 0, 0);
+        var top = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         top.Children.Add(header);
         top.Children.Add(_buttons);
-        Grid.SetColumn(_buttons, 1);
 
         // ── 进度 ───────────────────────────────────────────────────────────
         _progressTrack = new Border
@@ -458,7 +462,7 @@ internal sealed class IslandWindow : Window
             var display = Displays.ByNameOrPrimary(null);
             double scale = display.Scale <= 0 ? 1 : display.Scale;
             var screen = display.Bounds;
-            Width = 330;
+            Width = 316;
             Height = 92;
             Left = (screen.Width / scale - Width) / 2 + screen.Left / scale;
             Top = screen.Top / scale + 48 / scale;   // 菜单栏高 48px
