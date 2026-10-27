@@ -469,7 +469,24 @@ internal sealed class IslandWindow : Window
     /// <summary>系统主题变了：把已打开的卡片重新上色。</summary>
     static readonly MacDock.Core.NetEaseBridge HeartBridge = new();
 
+    // 歌名|歌手 → 是否已红心（只在真正读到过时写入）
+    static readonly Dictionary<string, bool> LikeCache = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>换歌时（不必打开卡片）读一次收藏状态：既写日志验证，也让卡片下次打开即为准。/// </summary>
+    /// <summary>带缓存的查询：端口不可用时退回"上次读到的真实值"，仍读不到才返回 null。</summary>
+    public static async Task<bool?> QueryLikeStateCachedAsync(string title, string artist)
+    {
+        string key = (title ?? "") + "|" + (artist ?? "");
+        var fresh = await HeartBridge.GetLikeStateAsync();
+        if (fresh is not null)
+        {
+            lock (LikeCache) LikeCache[key] = fresh.Value;
+            return fresh;
+        }
+        lock (LikeCache) { if (LikeCache.TryGetValue(key, out bool cached)) return cached; }
+        return null;
+    }
+
     public static async Task<bool?> QueryLikeStateAsync()
     {
         var liked = await HeartBridge.GetLikeStateAsync();

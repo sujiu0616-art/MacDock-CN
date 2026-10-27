@@ -599,6 +599,9 @@ internal sealed class MediaWatcher : IDisposable
                 }
             }
 
+            // 端口兜底：播放器没带调试端口时，等到暂停/停止再优雅重启（红心状态要靠它读）
+            try { NetEasePortSupervisor.Tick(PlaybackState == State.Playing); } catch (Exception) { }
+
             // 诊断：每 5 秒把"内存时钟 / 面板显示"打一条，便于对齐排错
             if (Environment.TickCount64 - _lastPosLogMs > 5000)
             {
