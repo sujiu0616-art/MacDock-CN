@@ -28,6 +28,7 @@ internal sealed class NetEaseBridge : IDisposable
     ClientWebSocket? _socket;
     int _nextId = 1;
     string _pageId = "";
+    static long _lastLookupLogAt;
 
     const string LikeStateScript = """
         (() => {
@@ -82,7 +83,12 @@ internal sealed class NetEaseBridge : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Info("Bridge: page lookup failed - " + ex.Message);
+            long nowTicks = Environment.TickCount64;
+            if (nowTicks - _lastLookupLogAt > 60_000)
+            {
+                _lastLookupLogAt = nowTicks;
+                Log.Info("Bridge: debug port unavailable - " + ex.Message);
+            }
         }
         return "";
     }

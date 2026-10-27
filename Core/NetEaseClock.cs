@@ -77,12 +77,25 @@ internal sealed class NetEaseClock : IDisposable
     public int ProcessId { get { lock (_gate) return _pid; } }
 
     /// <summary>换歌 / 用户拖进度 / 值突然跳变时调用：丢弃缓存地址，下次重新扫描。</summary>
+    // 被判"不是播放时钟"的地址：5 分钟内不再采用，避免重扫又锁到同一个错值
+    readonly Dictionary<long, long> _rejected = new();
+
+    bool IsRejected(long address)
+    {
+        long until;
+        if (!_rejected.TryGetValue(address, out until)) return false;
+        if (Environment.TickCount64 < until) return true;
+        _rejected.Remove(address);
+        return false;
+    }
+
     public void Invalidate()
     {
         lock (_gate)
         {
             _ready = false;
             _address = 0;
+            if (_address != 0) _rejected[_address] = Environment.TickCount64 + 300_000;
             _verifiedSeconds = -1;
         }
     }
@@ -193,12 +206,22 @@ internal sealed class NetEaseClock : IDisposable
             double score = expectedSeconds is { } expected
                 ? Math.Abs(value - expected)
                 : (item.kind == 1 ? 0 : 1);
+            if (IsRejected(item.address)) continue;
             if (best is null || score < best.Value.score)
                 best = (item.address, item.kind, value, score);
         }
 
         if (best is { } chosen)
         {
+            Thread.Sleep(1200);
+            if (!TryReadValue(handle, chosen.address, chosen.kind, out double recheck)
+                || (recheck - chosen.value) < 0.9 || (recheck - chosen.value) > 1.6)
+            {
+                Log.Info($"Media: clock candidate addr=0x{chosen.address:X} failed 1s/s recheck - rejected");
+                lock (_gate) _rejected[chosen.address] = Environment.TickCount64 + 300_000;
+                return;
+            }
+            chosen.value = recheck;
             // 预期值只用于排序，不做硬性拒绝：外推本身可能偏，不能因此否掉真值
             lock (_gate)
             {

@@ -24,6 +24,8 @@ internal sealed class MediaWatcher : IDisposable
     double _lastNativeSeconds = -1;
     long _lastNativeAtMs;
     long _zeroSinceMs;
+    long _progressCheckAt;
+    double _progressCheckValue;
     int _irregularCount;
     long _irregularSinceMs;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
@@ -565,6 +567,26 @@ internal sealed class MediaWatcher : IDisposable
                         }
                     }
                     else _zeroSinceMs = 0;
+
+                    // 播放中位置"几乎不涨" → 锁到的不是播放时钟，作废并重扫
+                    if (PlaybackState is State.Playing)
+                    {
+                        if (_progressCheckAt == 0) { _progressCheckAt = nowTick; _progressCheckValue = nativeSeconds; }
+                        else if (nowTick - _progressCheckAt >= 10_000)
+                        {
+                            double advanced = nativeSeconds - _progressCheckValue;
+                            if (advanced < 5.0)
+                            {
+                                Log.Info($"Media: clock barely advanced ({advanced:F1}s in 10s) - dropping address");
+                                _progressCheckAt = 0;
+                                _clock.Invalidate();
+                                return;
+                            }
+                            _progressCheckAt = nowTick;
+                            _progressCheckValue = nativeSeconds;
+                        }
+                    }
+                    else _progressCheckAt = 0;
 
                     if (!_clockLogged)
                     {
