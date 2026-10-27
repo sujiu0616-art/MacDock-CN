@@ -55,6 +55,14 @@ internal static class LyricsService
     }
 
     /// <summary>取歌词与时长（命中缓存就不发请求）。失败返回 null，不抛。</summary>
+    static readonly Dictionary<string, SongInfo> Memory = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>同步取已缓存的歌词/时长（不发起网络请求）。</summary>
+    public static SongInfo? Peek(string title, string artist)
+        => Memory.TryGetValue(CacheKey(title, artist), out var hit) ? hit : null;
+
+    static string CacheKey(string title, string artist) => (title ?? "") + "|" + (artist ?? "");
+
     public static async Task<SongInfo?> GetAsync(string title, string artist)
     {
         if (string.IsNullOrWhiteSpace(title)) return null;

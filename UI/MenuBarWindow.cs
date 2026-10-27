@@ -55,6 +55,8 @@ internal sealed class MenuBarWindow : Window
     MediaWatcher? _media;
 
     /// <summary>当前活动的媒体中枢（DockWindow 在睡眠唤醒/解锁时会用它重建会话）。</summary>
+    string _durationKey = "";
+
     public static MediaWatcher? Instance { get; private set; }
 
     void EnsureMediaWatcher()
@@ -80,6 +82,7 @@ internal sealed class MenuBarWindow : Window
     {
         if (_capsuleText is null || _media is null) return;
         // 有会话且有元数据就显示（暂停也显示）；只有会话消失/无标题时才收起
+        EnsureDuration();          // 不开卡片也要知道时长
         bool playing = _media.HasMetadata;
         // 胶囊里显示 "歌名 - 歌手"，和网易云自己的胶囊一样
         _capsuleText.Text = playing
@@ -169,6 +172,34 @@ internal sealed class MenuBarWindow : Window
             : Color.FromArgb((byte)(alpha + 0x10), 0x00, 0x00, 0x00));
         if (_capsuleText is not null)
             _capsuleText.Foreground = new SolidColorBrush(dark ? Colors.White : Color.FromRgb(0x20, 0x20, 0x24));
+    }
+
+    /// <summary>
+    /// 时长来自歌词接口（网易云 SMTC 不报时长）。这里在换歌后主动取一次，
+    /// 保证卡片里的总时长、进度条比例即使不打开卡片也是对的。
+    /// </summary>
+    void EnsureDuration()
+    {
+        var media = _media;
+        if (media is null || !media.HasMetadata) return;
+        string key = media.Title + "|" + media.Artist;
+        if (key == _durationKey) return;
+        _durationKey = key;
+
+        var known = LyricsService.Peek(media.Title, media.Artist);
+        if (known is not null) { media.SetKnownDuration(known.Duration); return; }
+
+        string title = media.Title, artist = media.Artist;
+        _ = Task.Run(async () =>
+        {
+            var info = await LyricsService.GetAsync(title, artist);
+            if (info is null) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_media is null || _media.Title != title || _media.Artist != artist) return;
+                _media.SetKnownDuration(info.Duration);
+            }));
+        });
     }
 
     void ToggleIsland()

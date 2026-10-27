@@ -43,6 +43,9 @@ internal sealed class IslandWindow : Window
     bool _fetchingLyrics;
     int _lyricOffsetMs;
     TextBlock? _artPlaceholder;
+    System.Windows.Shapes.Path? _likeGlyph;
+    readonly MacDock.Core.NetEaseBridge _bridge = new();
+    long _likeResetAtMs;
     Grid? _progressHost;
     TextBlock? _stateLabel;
     long _lastPersistAt;
@@ -132,6 +135,7 @@ internal sealed class IslandWindow : Window
             _media?.PlayPause();   // 不做乐观更新：命令后回读真值再刷新
         });
         var next = GlyphButton("M1,1 L9.4,6 L1,11 Z M10.2,1 L11.6,1 L11.6,11 L10.2,11 Z", () => _media?.Next());
+        _buttons.Children.Add(CreateLikeButton());
         _buttons.Children.Add(prev);
         _buttons.Children.Add(play);
         _buttons.Children.Add(next);
@@ -255,6 +259,53 @@ internal sealed class IslandWindow : Window
 
     internal const string PlayGeometry = "M1,0 L11,6 L1,12 Z";
     internal const string PauseGeometry = "M0.8,0 L4,0 L4,12 L0.8,12 Z M7,0 L10.2,0 L10.2,12 L7,12 Z";
+
+    /// <summary>红心：SMTC 没有收藏接口，走网易云自己的页面（需要它以调试端口启动）。</summary>
+    UIElement CreateLikeButton()
+    {
+        var heart = Geometry.Parse("M12,21 C12,21 3,14.5 3,8.6 3,5.5 5.4,3.2 8.3,3.2 10.1,3.2 11.4,4.1 12,5.1 12.6,4.1 13.9,3.2 15.7,3.2 18.6,3.2 21,5.5 21,8.6 21,14.5 12,21 12,21 Z");
+        _likeGlyph = new System.Windows.Shapes.Path
+        {
+            Data = heart,
+            Stroke = Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 1.5,
+            Fill = Brushes.Transparent,
+            Width = 14,
+            Height = 14,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            SnapsToDevicePixels = true,
+        };
+        var border = new Border
+        {
+            Child = _likeGlyph,
+            Width = 30,
+            Height = 30,
+            CornerRadius = new CornerRadius(15),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.Hand,
+        };
+        border.MouseEnter += (_, _) => border.Background = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
+        border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
+        border.MouseLeftButtonUp += async (_, e) =>
+        {
+            e.Handled = true;
+            bool ok = await _bridge.ToggleLikeAsync();
+            if (!ok)
+            {
+                Log.Info("Island: 收藏没成功（网易云需要以 --remote-debugging-port=9222 启动）");
+                return;
+            }
+            if (_likeGlyph is not null)
+            {
+                _likeGlyph.Fill = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
+                _likeGlyph.Stroke = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
+                _likeResetAtMs = Environment.TickCount64 + 2500;
+            }
+        };
+        return border;
+    }
 
     UIElement GlyphButton(string geometry, Action action)
     {
@@ -438,9 +489,10 @@ internal sealed class IslandWindow : Window
 
         // 歌词行：位置 + 用户偏移（网易云不报位置，残留误差靠配置里的 LyricOffsetMs 修）
         var lyricPosition = position + TimeSpan.FromMilliseconds(_lyricOffsetMs);
-        _lyric.Text = media.PositionKnown
-            ? (_lyrics?.LineAt(lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition) ?? "")
-            : "";
+        // 位置未知时至少显示第一句，而不是整行空白
+        _lyric.Text = _lyrics?.LineAt(media.PositionKnown
+            ? (lyricPosition < TimeSpan.Zero ? TimeSpan.Zero : lyricPosition)
+            : TimeSpan.Zero) ?? "";
 
         if (_stateLabel is not null && _stateLabel.Text != Label(media)) Log.Info($"Island: state {media.PlaybackState} known={media.PositionKnown} pos={position.TotalSeconds:F1}s");
         if (_stateLabel is not null)

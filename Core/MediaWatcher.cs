@@ -23,6 +23,7 @@ internal sealed class MediaWatcher : IDisposable
     long _lastPosLogMs;
     double _lastNativeSeconds = -1;
     long _lastNativeAtMs;
+    long _zeroSinceMs;
     int _irregularCount;
     long _irregularSinceMs;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
@@ -472,6 +473,8 @@ internal sealed class MediaWatcher : IDisposable
         {
             if (fakeDurationSeconds > 0) _tracker.SetDuration(TimeSpan.FromSeconds(fakeDurationSeconds));
 
+            try
+            {
             if (_session is null)
             {
                 _noSessionTicks++;
@@ -502,30 +505,31 @@ internal sealed class MediaWatcher : IDisposable
                 }
                 if (_clock.TryGetSeconds(out double nativeSeconds))
                 {
-                    // 暂停时网易云会把这个值清零、恢复后接着走，所以只在播放中采信；
-                    // 换歌会让值大幅回退，这种情况直接接受（它是真值）。
-                    // 合理性检查：时钟值不能超过已知时长（否则扫到了别的计数器，作废重扫）
+                    long nowTick = Environment.TickCount64;
+
+                    // 只接受 0 ~ 24 小时：超出说明读到别的计数器（曾把 TimeSpan 撑爆、整块界面变透明）
+                    if (!(nativeSeconds >= 0 && nativeSeconds <= 86_400))
+                    {
+                        Log.Info($"Media: clock value {nativeSeconds:F0}s out of range - dropping address");
+                        _clock.Invalidate();
+                        return;
+                    }
+
+                    // 超过已知时长太多 → 扫错了计数器
                     if (Duration > TimeSpan.Zero && nativeSeconds > Duration.TotalSeconds + 5)
                     {
                         Log.Info($"Media: clock value {nativeSeconds:F1}s exceeds duration {Duration.TotalSeconds:F1}s - rescan");
                         _clock.Invalidate();
                         return;
                     }
-                    long sinceChange = _songChangedAtMs == 0 ? long.MaxValue : Environment.TickCount64 - _songChangedAtMs;
-                                        if (false)
-                    {
-                        Log.Info($"Media: clock value {nativeSeconds:F1}s right after song change - not the position, rescan");
-                        _clock.Invalidate();
-                        return;
-                    }
-                    // 任何跳变都先跟随（拖动进度条 / 换歌 / 重播都是"跳到新位置"）
-                    long nowTick = Environment.TickCount64;
+
+                    // 任何跳变都先跟随（拖动进度条 / 换歌 / 重播都是"跳到新位置"）；
+                    // 只有连续 3 次不规则（变化量 ≠ 经过时间）才判定地址失效。
                     double dt = _lastNativeAtMs == 0 ? 0 : (nowTick - _lastNativeAtMs) / 1000.0;
                     if (_lastNativeSeconds >= 0 && dt > 0)
                     {
                         double dv = nativeSeconds - _lastNativeSeconds;
-                        bool irregular = Math.Abs(dv - dt) > 1.0;      // 正常应该 dv ≈ dt
-                        if (irregular)
+                        if (Math.Abs(dv - dt) > 1.0)
                         {
                             if (nowTick - _irregularSinceMs > 10_000) { _irregularSinceMs = nowTick; _irregularCount = 0; }
                             _irregularCount++;
@@ -538,7 +542,23 @@ internal sealed class MediaWatcher : IDisposable
                                 return;
                             }
                         }
+                        else _irregularCount = 0;
                     }
+
+                    // 播放中读数一直是 0 → 地址已失效（播放器重建时钟等），立刻重扫
+                    if (nativeSeconds < 1.0)
+                    {
+                        if (_zeroSinceMs == 0) _zeroSinceMs = nowTick;
+                        else if (nowTick - _zeroSinceMs > 3_000)
+                        {
+                            Log.Info("Media: clock stuck at 0 while playing - dropping address");
+                            _zeroSinceMs = 0;
+                            _clock.Invalidate();
+                            return;
+                        }
+                    }
+                    else _zeroSinceMs = 0;
+
                     if (!_clockLogged)
                     {
                         _clockLogged = true;
@@ -562,6 +582,12 @@ internal sealed class MediaWatcher : IDisposable
             {
                 Log.Info($"Media: single-track loop detected - rewound (loop #{_tracker.LoopRewinds})");
                 Changed?.Invoke();
+            }
+            }
+            catch (Exception ex)
+            {
+                // 看门狗里任何异常都不许把 UI 线程带走（曾经因为 TimeSpan 溢出整块界面变透明）
+                Log.Error(ex, "Media position tick");
             }
         };
         _positionTimer.Start();
