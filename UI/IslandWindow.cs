@@ -192,9 +192,6 @@ internal sealed class IslandWindow : Window
         // ── 组合 ───────────────────────────────────────────────────────────
         var stack = new StackPanel();
         stack.Children.Add(top);
-        stack.Children.Add(_lyric);
-        stack.Children.Add(progressHost);
-        stack.Children.Add(times);
         _progressTrack.SizeChanged += (_, _) => UpdateProgressAndLyric();
 
         // 点进度条跳转（网易云是否支持由 SMTC 的 Controls.IsPlaybackPositionEnabled 决定）
@@ -461,8 +458,8 @@ internal sealed class IslandWindow : Window
             var display = Displays.ByNameOrPrimary(null);
             double scale = display.Scale <= 0 ? 1 : display.Scale;
             var screen = display.Bounds;
-            Width = 344;
-            Height = 152;
+            Width = 330;
+            Height = 92;
             Left = (screen.Width / scale - Width) / 2 + screen.Left / scale;
             Top = screen.Top / scale + 48 / scale;   // 菜单栏高 48px
             // 注意：不调用 Activate() —— 不能把焦点从游戏/应用手里抢走
