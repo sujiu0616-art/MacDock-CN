@@ -186,6 +186,7 @@ internal sealed class MenuBarWindow : Window
         if (key == _durationKey) return;
         _durationKey = key;
 
+        _ = IslandWindow.QueryLikeStateAsync();   // 换歌即读收藏状态（不需要打开卡片）
         var known = LyricsService.Peek(media.Title, media.Artist);
         if (known is not null) { media.SetKnownDuration(known.Duration); return; }
 

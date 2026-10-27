@@ -113,8 +113,12 @@ internal sealed class IslandWindow : Window
         };
 
         // ── 文字 ───────────────────────────────────────────────────────────
-        _title = MakeText("", 13, FontWeights.SemiBold, 168);
-        _artist = MakeText("", 11, FontWeights.Normal, 168);
+        _title = MakeText("", 13, FontWeights.SemiBold, 190);
+        _title.TextTrimming = TextTrimming.CharacterEllipsis;
+        _title.MaxWidth = 150;
+        _artist = MakeText("", 11, FontWeights.Normal, 190);
+        _artist.TextTrimming = TextTrimming.CharacterEllipsis;
+        _artist.MaxWidth = 150;
         _lyric = MakeText("", 11.5, FontWeights.Normal, 236);
         _lyric.Margin = new Thickness(0, 6, 0, 0);
         _lyric.Opacity = 0.85;
@@ -345,7 +349,7 @@ internal sealed class IslandWindow : Window
             }
 
             // 后台发键 + 回读校正（不阻塞 UI）
-            await _bridge.ToggleLikeAsync();
+            MacDock.Core.NetEaseBridge.SendLikeHotkey();
 
             await Task.Delay(350);
             var actual = await _bridge.GetLikeStateAsync();
@@ -463,6 +467,16 @@ internal sealed class IslandWindow : Window
         }
     }
     /// <summary>系统主题变了：把已打开的卡片重新上色。</summary>
+    static readonly MacDock.Core.NetEaseBridge HeartBridge = new();
+
+    /// <summary>换歌时（不必打开卡片）读一次收藏状态：既写日志验证，也让卡片下次打开即为准。/// </summary>
+    public static async Task<bool?> QueryLikeStateAsync()
+    {
+        var liked = await HeartBridge.GetLikeStateAsync();
+        Log.Info("Heart: like state = " + (liked is null ? "unknown" : (liked.Value ? "liked" : "not liked")));
+        return liked;
+    }
+
     public static void ApplyCurrentTheme()
     {
         var island = _open;
@@ -489,7 +503,7 @@ internal sealed class IslandWindow : Window
             var display = Displays.ByNameOrPrimary(null);
             double scale = display.Scale <= 0 ? 1 : display.Scale;
             var screen = display.Bounds;
-            Width = 316;
+            Width = 360;
             Height = 72;   // 52 封面 + 上下 8 内边距 + 边框：跟内容贴合，底部不留白
             Left = (screen.Width / scale - Width) / 2 + screen.Left / scale;
             Top = screen.Top / scale + 48 / scale;   // 菜单栏高 48px

@@ -162,6 +162,55 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         }
     }
 
+    /// <summary>
+    /// 兜底菜单：有的应用（网易云就是）不接受我们转发的托盘消息，原生菜单弹不出来。
+    /// 这里给一份等价操作，保证右键不是没反应。
+    /// </summary>
+    void ShowFallbackMenu(string title)
+    {
+        var media = MenuBarWindow.Instance;
+        var menu = new ContextMenu();
+        MenuTheme.Apply(menu);
+
+        void Add(string header, Action action, bool enabled = true)
+        {
+            var item = new MenuItem { Header = header, IsEnabled = enabled };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+
+        Add("播放 / 暂停", () => media?.PlayPause(), media is not null);
+        Add("上一首", () => media?.Previous(), media is not null);
+        Add("下一首", () => media?.Next(), media is not null);
+        menu.Items.Add(new Separator());
+        Add("喜欢这首歌", () => MacDock.Core.NetEaseBridge.SendLikeHotkey());
+        Add("打开网易云", OpenNetEaseWindow);
+        Add("退出网易云", CloseNetEaseWindow);
+
+        menu.PlacementTarget = this;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        menu.IsOpen = true;
+    }
+
+    static void OpenNetEaseWindow()
+    {
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("cloudmusic"))
+        {
+            if (process.MainWindowHandle == IntPtr.Zero) continue;
+            NativeMethods.ShowWindow(process.MainWindowHandle, 9);
+            NativeMethods.SetForegroundWindow(process.MainWindowHandle);
+            return;
+        }
+    }
+
+    static void CloseNetEaseWindow()
+    {
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("cloudmusic"))
+        {
+            try { process.CloseMainWindow(); } catch (Exception) { }
+        }
+    }
+
     Border CreateView(NotifyIcon icon)
     {
         var image = new Image { Source = icon.Icon, Width = 16, Height = 16, Stretch = Stretch.Uniform };
@@ -208,6 +257,30 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             if (e.ChangedButton == MouseButton.Right)
             {
                 GetCursorPos(out var cursor);
+                // 右键后 350ms 看一眼到底有没有弹出原生菜单（只读，不点任何东西）
+                string label = icon.Title;
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    bool found = false;
+                    string rect = "";
+                    NativeMethods.EnumWindows((hwnd, _) =>
+                    {
+                        var cls = new System.Text.StringBuilder(64);
+                        NativeMethods.GetClassName(hwnd, cls, 64);
+                        if (cls.ToString() == "#32768" && NativeMethods.IsWindowVisible(hwnd))
+                        {
+                            NativeMethods.GetWindowRect(hwnd, out var r);
+                            rect = r.Left + "," + r.Top + "-" + r.Right + "," + r.Bottom;
+                            found = true;
+                            return false;
+                        }
+                        return true;
+                    }, IntPtr.Zero);
+                    if (!found) ShowFallbackMenu(label);
+                };
+                timer.Start();
             }
             SetPlacement(icon, view);   // 右键前重算：应用拿这个矩形算菜单锚点
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
