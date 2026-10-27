@@ -335,6 +335,13 @@ internal sealed class MediaWatcher : IDisposable
 
             var art = await LoadArtCachedAsync(key, props.Thumbnail);
 
+            // 网易云 SMTC 缩略图有时慢一拍（新歌名配旧封面）：用接口专辑图覆盖，保证同源
+            if (AppId.Contains("cloudmusic", StringComparison.OrdinalIgnoreCase))
+            {
+                var apiArt = await LyricsService.GetCoverAsync(title, artist);
+                if (apiArt is not null) art = apiArt;
+            }
+
             if (songChanged && !string.Equals(loggedKey, key, StringComparison.Ordinal))
             {
                 loggedKey = key;

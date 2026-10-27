@@ -18,6 +18,7 @@ internal sealed class NetEaseBridge : IDisposable
 
     ClientWebSocket? _socket;
     int _nextId = 1;
+    string _pageId = "";
 
     public bool IsConnected => _socket?.State == WebSocketState.Open;
 
@@ -42,7 +43,9 @@ internal sealed class NetEaseBridge : IDisposable
 
             _socket?.Dispose();
             _socket = new ClientWebSocket();
-            await _socket.ConnectAsync(new Uri($"ws://127.0.0.1:{Port}/devtools/page/{(await PageIdAsync(token))}"), token);
+            if (_pageId.Length == 0) _pageId = await PageIdAsync(token);
+            if (_pageId.Length == 0) return false;
+            await _socket.ConnectAsync(new Uri($"ws://127.0.0.1:{Port}/devtools/page/{_pageId}"), token);
             return IsConnected;
         }
         catch (Exception ex)

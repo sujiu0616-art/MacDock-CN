@@ -34,6 +34,7 @@ internal static class LyricsService
     {
         public Lyrics? Lyrics { get; init; }
         public TimeSpan Duration { get; init; }
+        public string? CoverUrl { get; init; }
     }
 
     internal sealed class Lyrics
@@ -88,9 +89,9 @@ internal static class LyricsService
                 long id = await SearchSongIdAsync(title, artist);
                 if (id > 0)
                 {
-                    var (lrcText, duration) = await FetchLyricAndDurationAsync(id);
+                    var (lrcText, duration, coverUrl) = await FetchLyricAndDurationAsync(id);
                     var lyrics = Parse(lrcText);
-                    info = new SongInfo { Lyrics = lyrics, Duration = duration };
+                    info = new SongInfo { Lyrics = lyrics, Duration = duration, CoverUrl = coverUrl };
 
                     if (lyrics.Lines.Count > 0 || duration > TimeSpan.Zero)
                     {
@@ -141,7 +142,7 @@ internal static class LyricsService
         return fallback;
     }
 
-    static async Task<(string Lyric, TimeSpan Duration)> FetchLyricAndDurationAsync(long id)
+    static async Task<(string Lyric, TimeSpan Duration, string? CoverUrl)> FetchLyricAndDurationAsync(long id)
     {
         string lrcText = "";
         using (var response = await Http.GetAsync($"https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=-1"))
@@ -155,20 +156,71 @@ internal static class LyricsService
         }
 
         TimeSpan duration = TimeSpan.Zero;
+        string? coverUrl = null;
         try
         {
             using var detail = await Http.GetAsync($"https://music.163.com/api/song/detail?ids=[{id}]");
             if (detail.IsSuccessStatusCode)
             {
                 using var detailJson = JsonDocument.Parse(await detail.Content.ReadAsStringAsync());
-                if (detailJson.RootElement.TryGetProperty("songs", out var songs) && songs.GetArrayLength() > 0
-                    && songs[0].TryGetProperty("duration", out var ms) && ms.TryGetInt64(out long millis) && millis > 0)
-                    duration = TimeSpan.FromMilliseconds(millis);
+                if (detailJson.RootElement.TryGetProperty("songs", out var songs) && songs.GetArrayLength() > 0)
+                {
+                    var song = songs[0];
+                    if (song.TryGetProperty("duration", out var ms) && ms.TryGetInt64(out long millis) && millis > 0)
+                        duration = TimeSpan.FromMilliseconds(millis);
+                    if (song.TryGetProperty("album", out var album) && album.TryGetProperty("picUrl", out var pic))
+                        coverUrl = pic.GetString();
+                }
             }
         }
         catch (Exception) { }
 
-        return (lrcText, duration);
+        return (lrcText, duration, coverUrl);
+    }
+
+    static readonly Dictionary<string, System.Windows.Media.Imaging.BitmapSource?> CoverCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 取这首歌的专辑封面。SMTC 的缩略图有时会慢一首（新歌名配旧封面），
+    /// 所以网易云会话优先用它自己的专辑图，按 歌名+歌手 缓存，同一首不重复下载。
+    /// </summary>
+    public static async Task<System.Windows.Media.Imaging.BitmapSource?> GetCoverAsync(string title, string artist)
+    {
+        string key = title + "|" + artist;
+        lock (CoverCache) { if (CoverCache.TryGetValue(key, out var hit)) return hit; }
+
+        System.Windows.Media.Imaging.BitmapSource? bitmap = null;
+        try
+        {
+            var info = await GetAsync(title, artist);
+            string? url = info?.CoverUrl;
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                url = url!.Replace("http://", "https://", StringComparison.OrdinalIgnoreCase);
+                if (url.Contains('?')) url += "&param=200y200"; else url += "?param=200y200";
+                var bytes = await Http.GetByteArrayAsync(url);
+                if (bytes is { Length: > 0 })
+                {
+                    var image = new System.Windows.Media.Imaging.BitmapImage();
+                    using var stream = new MemoryStream(bytes);
+                    image.BeginInit();
+                    image.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    image.StreamSource = stream;
+                    image.DecodePixelWidth = 96;
+                    image.EndInit();
+                    image.Freeze();
+                    bitmap = image;
+                }
+            }
+        }
+        catch (Exception) { }
+
+        lock (CoverCache)
+        {
+            if (CoverCache.Count > 200) CoverCache.Clear();
+            CoverCache[key] = bitmap;
+        }
+        return bitmap;
     }
 
     static Lyrics Parse(string lrc)

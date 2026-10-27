@@ -330,29 +330,31 @@ internal sealed class IslandWindow : Window
         border.MouseLeftButtonUp += async (_, e) =>
         {
             e.Handled = true;
+            long t0 = Environment.TickCount64;
 
-            // 状态还不知道 → 先把"读状态"的通道打开（会重启一次播放器），拿到状态再说
-            if (!_heartKnown)
+            // 先给反馈：立刻翻转颜色（不等网易云回执），体感就是"点了就变"
+            if (_heartKnown)
             {
-                Log.Info("Island: heart state unknown - enabling debug channel to read it");
-                await _bridge.EnsureChannelAsync();
-                var known = await _bridge.GetLikeStateAsync();
-                if (known is null)
-                {
-                    Log.Info("Island: still unknown (player not restarted / port closed)");
-                    return;
-                }
-                Dispatcher.BeginInvoke(new Action(() => PaintHeart(known)));
-                return;                     // 第一次点击只负责"看清状态"，不改收藏
+                PaintHeart(!_heartLiked);
+                Log.Info($"Island: heart painted in {Environment.TickCount64 - t0}ms (optimistic)");
+            }
+            else
+            {
+                PaintHeart(true);
             }
 
-            bool target = !_heartLiked;
+            // 后台发键 + 回读校正（不阻塞 UI）
             await _bridge.ToggleLikeAsync();
-            await Task.Delay(900);
+
+            await Task.Delay(350);
             var actual = await _bridge.GetLikeStateAsync();
-            if (actual is null) { Log.Info("Island: read-back failed after toggle"); return; }
-            Log.Info($"Island: heart {(_heartLiked ? "liked" : "not liked")} -> {(actual.Value ? "liked" : "not liked")} (wanted {target})");
-            Dispatcher.BeginInvoke(new Action(() => PaintHeart(actual)));
+            if (actual is null) { Log.Info("Island: heart read-back unavailable"); return; }
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                bool differs = _heartKnown && actual.Value != _heartLiked;
+                PaintHeart(actual);
+                Log.Info($"Island: heart confirmed {(actual.Value ? "liked" : "not liked")} after {Environment.TickCount64 - t0}ms" + (differs ? " (corrected)" : ""));
+            }));
         };
 
         return border;
