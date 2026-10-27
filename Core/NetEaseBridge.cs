@@ -153,6 +153,42 @@ internal sealed class NetEaseBridge : IDisposable
         }
     }
 
+    const string LikeStateScript = """
+        (() => {
+          const red = document.querySelector('[aria-label="likenumber_red"]');
+          if (red) return "liked";
+          const plain = document.querySelector('[aria-label="like_number"]');
+          if (plain) return "plain";
+          return "unknown";
+        })()
+        """;
+
+    /// <summary>读取当前歌曲是否已收藏（需要调试端口；读不到返回 null，不做猜测）。</summary>
+    public async Task<bool?> GetLikeStateAsync(CancellationToken token = default)
+    {
+        var value = await EvalAsync(LikeStateScript, token);
+        if (value is null) return null;
+        string text = value.Value.ValueKind == JsonValueKind.String ? value.Value.GetString() ?? "" : "";
+        if (text == "liked") return true;
+        if (text == "plain") return false;
+        return null;
+    }
+    /// <summary>
+    /// 确保"能读到收藏状态"的通道可用：调试端口没开就把播放器重启成带端口的形态。
+    /// 只在第一次需要读状态时发生一次，之后每次换歌都能直接读到真实红心状态。
+    /// </summary>
+    public async Task<bool> EnsureChannelAsync(CancellationToken token = default)
+    {
+        if (await ConnectAsync(token)) return true;
+        if (!RestartPlayerWithDebugPort()) return false;
+        for (int i = 0; i < 15; i++)
+        {
+            await Task.Delay(1000, token);
+            if (await ConnectAsync(token)) return true;
+        }
+        return false;
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
@@ -170,7 +206,8 @@ internal sealed class NetEaseBridge : IDisposable
         try
         {
             keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-            Thread.Sleep(30);
+            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);      // Alt 必须真的按下
+            Thread.Sleep(40);
             keybd_event(VK_L, 0, 0, UIntPtr.Zero);
             Thread.Sleep(30);
             keybd_event(VK_L, 0, KEYUP, UIntPtr.Zero);

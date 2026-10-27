@@ -46,6 +46,7 @@ internal sealed class IslandWindow : Window
     System.Windows.Shapes.Path? _likeGlyph;
     readonly MacDock.Core.NetEaseBridge _bridge = new();
     long _likeResetAtMs;
+    bool _heartLiked;
     Grid? _progressHost;
     TextBlock? _stateLabel;
     long _lastPersistAt;
@@ -261,6 +262,44 @@ internal sealed class IslandWindow : Window
     internal const string PauseGeometry = "M0.8,0 L4,0 L4,12 L0.8,12 Z M7,0 L10.2,0 L10.2,12 L7,12 Z";
 
     /// <summary>红心：SMTC 没有收藏接口，走网易云自己的页面（需要它以调试端口启动）。</summary>
+    bool _heartKnown;
+    string _heartSongKey = "";
+
+    /// <summary>三态：未知（暗）/ 未收藏（白空心）/ 已收藏（实红）。只反映网易云的真实状态。</summary>
+    void PaintHeart(bool? liked)
+    {
+        if (_likeGlyph is null) return;
+        var accent = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
+        var normal = Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF));
+        var unknown = Frozen(Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF));
+
+        if (liked is null)
+        {
+            _heartKnown = false;
+            _likeGlyph.Fill = Brushes.Transparent;
+            _likeGlyph.Stroke = unknown;
+            return;
+        }
+        _heartKnown = true;
+        _heartLiked = liked.Value;
+        _likeGlyph.Fill = liked.Value ? accent : Brushes.Transparent;
+        _likeGlyph.Stroke = liked.Value ? accent : normal;
+    }
+
+    DateTime _heartNextProbe = DateTime.MinValue;
+
+    /// <summary>同步真实收藏状态：最多 5 秒一次；没有调试端口就静默跳过。</summary>
+    void RefreshHeartState()
+    {
+        if (DateTime.UtcNow < _heartNextProbe) return;
+        _heartNextProbe = DateTime.UtcNow.AddSeconds(4);
+        _ = Task.Run(async () =>
+        {
+            var liked = await _bridge.GetLikeStateAsync();
+            Dispatcher.BeginInvoke(new Action(() => PaintHeart(liked)));
+        });
+    }
+
     UIElement CreateLikeButton()
     {
         var heart = Geometry.Parse("M12,21 C12,21 3,14.5 3,8.6 3,5.5 5.4,3.2 8.3,3.2 10.1,3.2 11.4,4.1 12,5.1 12.6,4.1 13.9,3.2 15.7,3.2 18.6,3.2 21,5.5 21,8.6 21,14.5 12,21 12,21 Z");
@@ -291,19 +330,31 @@ internal sealed class IslandWindow : Window
         border.MouseLeftButtonUp += async (_, e) =>
         {
             e.Handled = true;
-            bool ok = await _bridge.ToggleLikeAsync();
-            if (!ok)
+
+            // 状态还不知道 → 先把"读状态"的通道打开（会重启一次播放器），拿到状态再说
+            if (!_heartKnown)
             {
-                Log.Info("Island: 收藏没成功（网易云需要以 --remote-debugging-port=9222 启动）");
-                return;
+                Log.Info("Island: heart state unknown - enabling debug channel to read it");
+                await _bridge.EnsureChannelAsync();
+                var known = await _bridge.GetLikeStateAsync();
+                if (known is null)
+                {
+                    Log.Info("Island: still unknown (player not restarted / port closed)");
+                    return;
+                }
+                Dispatcher.BeginInvoke(new Action(() => PaintHeart(known)));
+                return;                     // 第一次点击只负责"看清状态"，不改收藏
             }
-            if (_likeGlyph is not null)
-            {
-                _likeGlyph.Fill = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
-                _likeGlyph.Stroke = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
-                _likeResetAtMs = Environment.TickCount64 + 2500;
-            }
+
+            bool target = !_heartLiked;
+            await _bridge.ToggleLikeAsync();
+            await Task.Delay(900);
+            var actual = await _bridge.GetLikeStateAsync();
+            if (actual is null) { Log.Info("Island: read-back failed after toggle"); return; }
+            Log.Info($"Island: heart {(_heartLiked ? "liked" : "not liked")} -> {(actual.Value ? "liked" : "not liked")} (wanted {target})");
+            Dispatcher.BeginInvoke(new Action(() => PaintHeart(actual)));
         };
+
         return border;
     }
 
@@ -382,6 +433,8 @@ internal sealed class IslandWindow : Window
             island.PositionUnderMenuBar(owner);
             island.Refresh();
             island._ticker.Start();
+        island._heartNextProbe = DateTime.MinValue;   // 打开时强制读一次真实收藏状态
+        island.RefreshHeartState();
         }
         catch (Exception ex)
         {
@@ -468,6 +521,21 @@ internal sealed class IslandWindow : Window
 
     void UpdateProgressAndLyric()
     {
+        // 换歌就立刻重新读收藏状态（新歌是不是已经红心过）
+        var nowPlaying = _media;
+        if (nowPlaying is not null)
+        {
+            string key = nowPlaying.Title + "|" + nowPlaying.Artist;
+            if (key != _heartSongKey)
+            {
+                _heartSongKey = key;
+                _heartKnown = false;
+                PaintHeart(null);
+                _heartNextProbe = DateTime.MinValue;
+            }
+        }
+
+        RefreshHeartState();
         var media = _media;
         if (media is null || !media.HasSession) return;
 
