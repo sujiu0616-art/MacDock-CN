@@ -223,7 +223,7 @@ internal sealed class IslandWindow : Window
         _card = new Border
         {
             Child = content,
-            Padding = new Thickness(12, 10, 12, 10),
+            Padding = new Thickness(12, 8, 12, 8),
             CornerRadius = new CornerRadius(20),
             BorderThickness = new Thickness(1),
         };
@@ -463,7 +463,7 @@ internal sealed class IslandWindow : Window
             double scale = display.Scale <= 0 ? 1 : display.Scale;
             var screen = display.Bounds;
             Width = 316;
-            Height = 92;
+            Height = 72;   // 52 封面 + 上下 8 内边距 + 边框：跟内容贴合，底部不留白
             Left = (screen.Width / scale - Width) / 2 + screen.Left / scale;
             Top = screen.Top / scale + 48 / scale;   // 菜单栏高 48px
             // 注意：不调用 Activate() —— 不能把焦点从游戏/应用手里抢走
