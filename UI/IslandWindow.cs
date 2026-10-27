@@ -142,16 +142,15 @@ internal sealed class IslandWindow : Window
         _buttons.Children.Add(next);
         _playGlyph = (System.Windows.Shapes.Path)((Border)play).Child;
 
-        // 内容整体居中：封面+文字，然后按钮，中间留固定间距（不再左一块右一块）
-        _buttons.Margin = new Thickness(18, 0, 0, 0);
-        var top = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        // 三段分散对齐：封面贴左、文字占满中间、按钮贴右（左右内边距收紧到 10）
+        _buttons.Margin = new Thickness(0, 0, 0, 0);
+        var top = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         top.Children.Add(header);
         top.Children.Add(_buttons);
+        Grid.SetColumn(_buttons, 2);
 
         // ── 进度 ───────────────────────────────────────────────────────────
         _progressTrack = new Border
@@ -223,7 +222,7 @@ internal sealed class IslandWindow : Window
         _card = new Border
         {
             Child = content,
-            Padding = new Thickness(12, 8, 12, 8),
+            Padding = new Thickness(10, 8, 10, 8),
             CornerRadius = new CornerRadius(20),
             BorderThickness = new Thickness(1),
         };
