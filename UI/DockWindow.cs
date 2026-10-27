@@ -2073,6 +2073,7 @@ internal sealed class DockWindow : Window
                 {
                     Theme.Refresh();
                     ApplyTheme();
+                    IslandWindow.ApplyCurrentTheme();   // 系统深浅色切换时，展开中的卡片同步换色
                 }
                 break;
             case WM_DISPLAYCHANGE:

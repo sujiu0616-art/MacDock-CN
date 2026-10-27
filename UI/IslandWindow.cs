@@ -242,6 +242,7 @@ internal sealed class IslandWindow : Window
     }
 
     System.Windows.Shapes.Path _playGlyph = null!;
+    readonly System.Collections.Generic.List<System.Windows.Shapes.Path> _glyphs = new();   // 主题切换时要一起换色
 
     static TextBlock MakeText(string text, double size, FontWeight weight, double maxWidth)
     {
@@ -270,8 +271,8 @@ internal sealed class IslandWindow : Window
     {
         if (_likeGlyph is null) return;
         var accent = Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54));
-        var normal = Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF));
-        var unknown = Frozen(Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF));
+        var normal = MacDock.Core.Theme.IsDark ? Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF)) : Frozen(Color.FromArgb(0xE0, 0x00, 0x00, 0x00));
+        var unknown = MacDock.Core.Theme.IsDark ? Frozen(Color.FromArgb(0x60, 0xFF, 0xFF, 0xFF)) : Frozen(Color.FromArgb(0x55, 0x00, 0x00, 0x00));
 
         if (liked is null)
         {
@@ -373,6 +374,7 @@ internal sealed class IslandWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             SnapsToDevicePixels = true,
         };
+        _glyphs.Add(text);
         var border = new Border
         {
             Child = text,
@@ -393,16 +395,33 @@ internal sealed class IslandWindow : Window
 
     void ApplyTheme()
     {
-        // 固定深色玻璃，和菜单栏同材质
-        _card.Background = Frozen(Color.FromArgb(0xF0, 0x1E, 0x20, 0x26));
-        _card.BorderBrush = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
-        _title.Foreground = Frozen(Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF5));
-        _artist.Foreground = Frozen(Color.FromArgb(0xB0, 0xE8, 0xE8, 0xEE));
-        _lyric.Foreground = Frozen(Color.FromArgb(0xE0, 0xFF, 0xFF, 0xFF));
+        // 跟系统深浅色走：深色 = 原来的深玻璃，浅色 = 近白玻璃 + 深字
+        bool dark = MacDock.Core.Theme.IsDark;
+        if (dark)
+        {
+            _card.Background = Frozen(Color.FromArgb(0xF0, 0x1E, 0x20, 0x26));
+            _card.BorderBrush = Frozen(Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
+            _title.Foreground = Frozen(Color.FromArgb(0xFF, 0xF2, 0xF2, 0xF5));
+            _artist.Foreground = Frozen(Color.FromArgb(0xB0, 0xE8, 0xE8, 0xEE));
+        }
+        else
+        {
+            _card.Background = Frozen(Color.FromArgb(0xF4, 0xF7, 0xF7, 0xFA));
+            _card.BorderBrush = Frozen(Color.FromArgb(0x1C, 0x00, 0x00, 0x00));
+            _title.Foreground = Frozen(Color.FromArgb(0xFF, 0x1D, 0x1D, 0x20));
+            _artist.Foreground = Frozen(Color.FromArgb(0xB0, 0x3A, 0x3A, 0x42));
+        }
+        _lyric.Foreground = _title.Foreground;
         _elapsed.Foreground = _artist.Foreground;
         _total.Foreground = _artist.Foreground;
         _empty.Foreground = _artist.Foreground;
-        _playGlyph.Fill = _title.Foreground;
+        foreach (var glyph in _glyphs) glyph.Fill = _title.Foreground;
+        if (_likeGlyph is not null && !(_heartKnown && _heartLiked)) _likeGlyph.Stroke = _title.Foreground;
+        if (_likeGlyph is not null)
+        {
+            _likeGlyph.Stroke = dark ? Frozen(Color.FromArgb(0xF0, 0xFF, 0xFF, 0xFF)) : Frozen(Color.FromArgb(0xE6, 0x00, 0x00, 0x00));
+            _likeGlyph.Fill = _heartKnown && _heartLiked ? Frozen(Color.FromArgb(0xFF, 0xE0, 0x3B, 0x54)) : Brushes.Transparent;
+        }
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -443,6 +462,15 @@ internal sealed class IslandWindow : Window
             Log.Error(ex, "Showing the island");
         }
     }
+    /// <summary>系统主题变了：把已打开的卡片重新上色。</summary>
+    public static void ApplyCurrentTheme()
+    {
+        var island = _open;
+        if (island is null) return;
+        island.ApplyTheme();
+        island.PaintHeart(island._heartKnown ? island._heartLiked : (bool?)null);
+    }
+
     public static void HideIsland()
     {
         var island = _open;
