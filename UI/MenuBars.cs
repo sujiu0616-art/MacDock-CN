@@ -129,6 +129,9 @@ internal sealed class MenuBars : IDisposable
 
     public void UpdateClock()
     {
+        // 系统改过时区/校时后，.NET 会缓存旧的 TimeZoneInfo —— 界面时间就会一直偏一小时。
+        // 每次刷新前丢掉缓存；开销可以忽略（一分钟一次）。
+        try { TimeZoneInfo.ClearCachedData(); } catch (Exception) { }
         var now = DateTime.Now;
         var culture = CultureInfo.CurrentCulture;
         ClockText = MacClock(now, culture);

@@ -40,12 +40,14 @@ internal sealed class NameTip : Window
         Top = -32000;
         Width = 10;
         Height = 10;
+        SizeToContent = SizeToContent.WidthAndHeight;
 
         _text = new TextBlock
         {
             FontFamily = Typo.Ui,
             FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
         };
         TextOptions.SetTextFormattingMode(_text, TextFormattingMode.Display);
         _box = new Border
@@ -107,9 +109,9 @@ internal sealed class NameTip : Window
         _box.Background = Frozen(dark ? Color.FromArgb(0xF0, 0x18, 0x18, 0x1C) : Color.FromArgb(0xF2, 0xF7, 0xF7, 0xFA));
         _box.BorderBrush = Frozen(dark ? Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
 
-        _text.Measure(new Size(MaxWidth, double.PositiveInfinity));
-        Width = Math.Min(MaxWidth, _text.DesiredSize.Width + 20);
-        Height = TipHeight + 2;
+        _text.MaxWidth = MaxWidth - 18;
+        // 高度/宽度都交给 WPF 按内容算（下面 SizeToContent），多行提示不会再被裁
+        UpdateLayout();
     }
 
     static Brush Frozen(Color c)
@@ -133,11 +135,14 @@ internal sealed class NameTip : Window
     void Reposition(Rect anchor)
     {
         // anchor 是"被提示元素"的屏幕矩形（DIU）：气泡贴在它下方居中，超屏则上移
-        double left = anchor.Left + anchor.Width / 2 - Width / 2;
+        UpdateLayout();
+        double width = ActualWidth > 1 ? ActualWidth : Width;
+        double height = ActualHeight > 1 ? ActualHeight : Height;
+        double left = anchor.Left + anchor.Width / 2 - width / 2;
         double top = anchor.Bottom + 6;
         var work = SystemParameters.WorkArea;
-        left = Math.Max(work.Left + 4, Math.Min(left, work.Right - Width - 4));
-        if (top + Height > work.Bottom) top = anchor.Top - Height - 6;
+        left = Math.Max(work.Left + 4, Math.Min(left, work.Right - width - 4));
+        if (top + height > work.Bottom) top = anchor.Top - height - 6;
         Left = left;
         Top = top;
     }

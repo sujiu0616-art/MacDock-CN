@@ -210,6 +210,14 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
                 GetCursorPos(out var cursor);
             }
             SetPlacement(icon, view);   // 右键前重算：应用拿这个矩形算菜单锚点
+            // Windows 的前台锁：非前台进程调 TrackPopupMenu 会被直接挡掉。
+            // 把"允许前台"的令牌交出去，右键菜单才有可能真正弹出来（微信/Qt/网易云这类都吃这条）。
+            if (e.ChangedButton is MouseButton.Right or MouseButton.Middle)
+            {
+                try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { }
+            }
+            if (e.ChangedButton == MouseButton.Right)
+                Log.Info("Tray: right-click on <" + icon.Title + "> - forwarding to icon host");
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
             e.Handled = true;
         };
@@ -249,6 +257,11 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         GetCursorPos(out var p);
         return (uint)(((p.Y & 0xFFFF) << 16) | (p.X & 0xFFFF));
     }
+    const int ASFW_ANY = -1;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool AllowSetForegroundWindow(int processId);
+
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
     static extern bool SendNotifyMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
