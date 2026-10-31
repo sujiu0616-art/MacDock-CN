@@ -22,36 +22,48 @@ internal static class WallpaperFrost
 {
     static BitmapSource? _image;
     static string? _path;
+    static int _pixelsWide;
     static DateTime _readAt;
 
-    /// <summary>The wallpaper as an image, or null when Windows has none (a solid colour theme).</summary>
-    public static BitmapSource? Image
+    /// <summary>
+    /// The wallpaper decoded to <paramref name="pixelsWide"/> wide, or null when Windows has none.
+    ///
+    /// 关键：以前是按原始分辨率解码的。这台机器的壁纸是 6554×4096 的 PNG —— 解成 BGRA 要
+    /// 6554×4096×4 ≈ 102 MB 常驻，而屏幕上只用到 2560 宽的一条带。DecodePixelWidth 让 WPF
+    /// 在解码阶段就缩到目标宽度（顺带解码也快得多），2560 宽只需 ≈16 MB。
+    /// </summary>
+    static BitmapSource? Load(int pixelsWide)
     {
-        get
+        var path = CurrentPath();
+        if (path is null) return null;
+        pixelsWide = Math.Clamp(pixelsWide, 64, 8192);
+        // Re-read at most once a minute: a slideshow wallpaper changes under us, a fixed one does not.
+        if (_image is not null && _path == path && _pixelsWide == pixelsWide && DateTime.UtcNow - _readAt < TimeSpan.FromMinutes(1))
+            return _image;
+        try
         {
-            var path = CurrentPath();
-            if (path is null) return null;
-            // Re-read at most once a minute: a slideshow wallpaper changes under us, a fixed one does not.
-            if (_image is not null && _path == path && DateTime.UtcNow - _readAt < TimeSpan.FromMinutes(1)) return _image;
-            try
-            {
-                var image = new BitmapImage();
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
-                image.UriSource = new Uri(path, UriKind.Absolute);
-                image.EndInit();
-                image.Freeze();
-                _image = image;
-                _path = path;
-                _readAt = DateTime.UtcNow;
-                return image;
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Reading the wallpaper");
-                return null;
-            }
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            image.DecodePixelWidth = pixelsWide;
+            image.UriSource = new Uri(path, UriKind.Absolute);
+            image.EndInit();
+            image.Freeze();
+
+            if (_pixelsWide != pixelsWide)
+                Log.Info($"Wallpaper: decoded at {image.PixelWidth}x{image.PixelHeight} (requested {pixelsWide}px wide, ~{image.PixelWidth * image.PixelHeight * 4 / 1048576} MB)");
+
+            _image = image;
+            _path = path;
+            _pixelsWide = pixelsWide;
+            _readAt = DateTime.UtcNow;
+            return image;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reading the wallpaper");
+            return null;
         }
     }
 
@@ -79,10 +91,12 @@ internal static class WallpaperFrost
     public static ImageBrush? BrushFor(RECT screen, Display display, out double luminance)
     {
         luminance = 0;
-        var image = Image;
-        if (image is null || image.PixelWidth == 0 || image.PixelHeight == 0) return null;
         var monitor = display.Bounds;
         if (monitor.Width <= 0 || monitor.Height <= 0) return null;
+
+        // 只按这块屏的分辨率解码：屏幕上永远不需要比这更细的壁纸
+        var image = Load(monitor.Width);
+        if (image is null || image.PixelWidth == 0 || image.PixelHeight == 0) return null;
 
         // Wallpaper pixels per screen pixel, then the crop inside the image.
         double sx = image.PixelWidth / (double)monitor.Width, sy = image.PixelHeight / (double)monitor.Height;

@@ -11,7 +11,11 @@ namespace MacDock.Core;
 internal static class ShellItems
 {
     public const string AppsFolder = @"shell:AppsFolder\";
-    const int IconPixels = 256;
+    /// <summary>
+    /// 图标解码边长（像素）。原来是写死 256：Dock 最大只显示到 ~114px，多出来的分辨率纯浪费，
+    /// 每张 256×256 的 Pbgra32 位图要 256KB。现在按实际显示尺寸给，默认 128（≈65KB/张）。
+    /// </summary>
+    public static int IconPixels { get; set; } = 128;
 
     public static bool Exists(string parsingName)
     {

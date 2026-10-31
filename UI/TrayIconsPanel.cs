@@ -29,6 +29,8 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
     readonly TrayService _trayService = new();
     readonly NotificationArea _area;
     // By reference: NotifyIcon equality compares its (changing) window handle, id and GUID.
+    bool _pixelLogged;
+
     readonly Dictionary<NotifyIcon, Border> _views = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<NotifyIcon> _subscribed = new(ReferenceEqualityComparer.Instance);
     bool _disposed;
@@ -164,6 +166,11 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
 
     Border CreateView(NotifyIcon icon)
     {
+        if (icon.Icon is System.Windows.Media.Imaging.BitmapSource probe && !_pixelLogged)
+        {
+            _pixelLogged = true;
+            Log.Info($"TrayIcons: pixel size {probe.PixelWidth}x{probe.PixelHeight} (source {probe.GetType().Name})");
+        }
         var image = new Image { Source = icon.Icon, Width = 16, Height = 16, Stretch = Stretch.Uniform };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         var view = new Border
@@ -219,6 +226,22 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             if (e.ChangedButton == MouseButton.Right)
                 Log.Info("Tray: right-click on <" + icon.Title + "> - forwarding to icon host");
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
+
+            // 微信（Qt）对托盘单击经常"吞掉"：主窗口不恢复。这里兜底把它拉出来。
+            if (e.ChangedButton == MouseButton.Left && MacDock.Core.WeChatRestorer.LooksLikeWeChat(icon.Title))
+            {
+                var restore = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                restore.Tick += (_, _) =>
+                {
+                    restore.Stop();
+                    MacDock.Core.WeChatRestorer.Restore();
+                };
+                restore.Start();
+            }
+            // 200ms 后清理"应用的托盘消息窗口"（微信的 WxTrayIconMessageWindow 会被自己弹出来）
+            var hygiene = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            hygiene.Tick += (_, _) => { hygiene.Stop(); HideStrayTrayWindows(); };
+            hygiene.Start();
             e.Handled = true;
         };
         return view;
@@ -252,6 +275,29 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
     }
 
     /// <summary>The cursor position packed as the tray callbacks expect it (x low word, y high word).</summary>
+    /// <summary>隐藏托盘应用的消息窗口（类名含 TrayIconMessageWindow 的可见空白窗）。</summary>
+    static void HideStrayTrayWindows()
+    {
+        try
+        {
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                NativeMethods.EnumWindows((hwnd, _) =>
+                {
+                    var cls = new System.Text.StringBuilder(128);
+                    NativeMethods.GetClassName(hwnd, cls, 128);
+                    string name = cls.ToString();
+                    if (name.IndexOf("TrayIconMessageWindow", StringComparison.OrdinalIgnoreCase) < 0) return true;
+                    if (!NativeMethods.IsWindowVisible(hwnd)) return true;
+                    NativeMethods.ShowWindow(hwnd, 0);   // SW_HIDE
+                    Log.Info("Tray: hid stray message window " + name);
+                    return true;
+                }, IntPtr.Zero);
+            });
+        }
+        catch (Exception ex) { Log.Info("Tray: hide stray failed - " + ex.Message); }
+    }
+
     static uint MouseParam()
     {
         GetCursorPos(out var p);

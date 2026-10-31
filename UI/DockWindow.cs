@@ -269,7 +269,28 @@ internal sealed class DockWindow : Window
                     });
                 }
             }
-            if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
+            if (!_launchpadOpen)
+            {
+                string? fgClass = GetClassName(GetForegroundWindow());
+                // 全屏窗口被最小化（Win+D / 显示桌面 / 游戏自己最小化）→ 用户回到了桌面，shell 必须出来
+                if (_fullscreen && _fullscreenOwner != IntPtr.Zero && IsIconic(_fullscreenOwner))
+                {
+                    Log.Info("Fullscreen owner minimized - restoring shell");
+                    SetFullscreen(false, immediate: true);
+                    EnsureShellVisible();
+                    CheckStuckTaskSwitcher();
+                    return;
+                }
+                if (fgClass is "Progman" or "WorkerW")
+                {
+                    if (_fullscreen) { Log.Info("Show desktop detected (tick) - restoring shell"); SetFullscreen(false, immediate: true); }
+                    EnsureShellVisible();
+                }
+                else
+                {
+                    SetFullscreen(DetectFullscreenApp());
+                }
+            }
             CheckStuckTaskSwitcher();
         };
         UiWatchdog.Start(Dispatcher);
@@ -280,7 +301,24 @@ internal sealed class DockWindow : Window
         _foregroundWatcher = new ForegroundWatcher(() =>
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (!_launchpadOpen) SetFullscreen(DetectFullscreenApp());
+                if (!_launchpadOpen)
+                {
+                    string? fgClass = GetClassName(GetForegroundWindow());
+                    if (fgClass is "Progman" or "WorkerW")
+                    {
+                        // Win+D / 显示桌面：用户明确要回桌面，全屏判断必须让路
+                        if (_fullscreen)
+                        {
+                            Log.Info("Show desktop detected - restoring shell");
+                            SetFullscreen(false, immediate: true);
+                        }
+                        EnsureShellVisible();
+                    }
+                    else
+                    {
+                        SetFullscreen(DetectFullscreenApp());
+                    }
+                }
             }), System.Windows.Threading.DispatcherPriority.Input));
         _foregroundWatcher.Start();
         if (!_config.Settings.SafeMode) UpdateStripGuard();
@@ -380,7 +418,8 @@ internal sealed class DockWindow : Window
         _tracker.AttentionRequested += OnAttentionRequested;
         SyncWindows();
         long afterTracker = StartupTiming.ElapsedMilliseconds;
-        if (Environment.GetCommandLineArgs().Contains("--diag")) StartDiagnostics();
+// 常开内存/资源快照（5 分钟一行，用来长期观察是否泄漏；--diag 只额外带事件计数）
+        StartDiagnostics();
 
         // Lock, user switch (session), sleep and screen off (power): pause, then check everything again.
         WTSRegisterSessionNotification(_hwnd, 0);
@@ -547,7 +586,17 @@ internal sealed class DockWindow : Window
         // _fullscreen 时也要跳过：全屏应用在前面时是我们主动收起的，
         // 这里每 5 秒一次"看不见就显示回来"会把 Dock 又拉出来（菜单栏却还藏着）
         // → 用户看到的就是"全屏后任务栏还在、菜单不在"。
-        if (_hwnd == IntPtr.Zero || _launchpadOpen || _suppressedByNativeTaskbar || _fullscreen) return;
+        if (_hwnd == IntPtr.Zero || _launchpadOpen || _suppressedByNativeTaskbar) return;
+
+        // 全屏标志可能是"粘住"的：游戏退出、Win+D 显示桌面之后，前台已经不是全屏窗口，
+        // 但 _fullscreen 仍为 true，于是这条守卫一直跳过，Dock 再也回不来。
+        // 用结构性判据复核一次：前台既不盖满工作区、也不是我们认定的全屏窗口 → 清标志并立即恢复。
+        if (_fullscreen)
+        {
+            if (CoversWorkArea(GetForegroundWindow()) || DetectFullscreenApp()) return;
+            Log.Info("Fullscreen: stuck flag cleared by shell guard (foreground no longer fullscreen)");
+            SetFullscreen(false, immediate: true);
+        }
         try
         {
             bool hidden = !IsWindowVisible(_hwnd);
@@ -587,6 +636,13 @@ internal sealed class DockWindow : Window
         }
         _placedMonitor = display.Handle;
         _scale = display.Scale;
+        // 图标解码尺寸 = 最大放大尺寸 × 屏幕缩放 × 1.15（够清晰，又不再每张多占两百多 KB）
+        int iconPixels = (int)Math.Ceiling(settings.MagnifiedSize * _scale * 1.15);
+        if (iconPixels != ShellItems.IconPixels)
+        {
+            ShellItems.IconPixels = Math.Clamp(iconPixels, 48, 160);
+            Log.Info($"Icons: decode size {ShellItems.IconPixels}px (magnified {settings.MagnifiedSize} DIU @ {_scale:0.##}x)");
+        }
         _m = BuildMetrics();
 
         int thick = (int)Math.Ceiling(_m.WindowThickness * _scale);
@@ -1327,6 +1383,8 @@ internal sealed class DockWindow : Window
         }
         SetTrashDropHover(false);
 
+        if (IsUrlDrag(e)) { e.Effects = DragDropEffects.Link; return; }
+
         var paths = DroppedPaths(e.Data);
         if (paths.Count == 0 || IsPinnedTarget(paths[0]))
         {
@@ -1359,6 +1417,9 @@ internal sealed class DockWindow : Window
             return;
         }
 
+        // 把浏览器地址栏 / 页面里的链接拖到 Dock：直接变成一个网页应用
+        if (TryDropUrl(e)) return;
+
         var paths = DroppedPaths(e.Data).Where(p => !IsPinnedTarget(p)).ToList();
         var ghost = _dropGhost;
         _dropGhost = null;
@@ -1390,6 +1451,26 @@ internal sealed class DockWindow : Window
         RebuildEntries();
         SyncWindows();
         e.Effects = DragDropEffects.Link;
+    }
+
+    static bool IsUrlDrag(DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.Text) && !e.Data.GetDataPresent(DataFormats.UnicodeText)) return false;
+        string? text = e.Data.GetData(DataFormats.UnicodeText) as string ?? e.Data.GetData(DataFormats.Text) as string;
+        return !string.IsNullOrWhiteSpace(text)
+            && (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+    }
+
+    bool TryDropUrl(DragEventArgs e)
+    {
+        if (!IsUrlDrag(e)) return false;
+        string? text = e.Data.GetData(DataFormats.UnicodeText) as string ?? e.Data.GetData(DataFormats.Text) as string;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        string url = text.Trim().Split('\n')[0].Trim();
+        string name = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host : url;
+        AddWebApp(name, url);
+        e.Effects = DragDropEffects.Link;
+        return true;
     }
 
     void DropGhostAway()
@@ -1789,8 +1870,52 @@ internal sealed class DockWindow : Window
             AutoStart.Set(!autoStart);
         }, isChecked: autoStart);
         menu.AddSeparator();
+        menu.AddSeparator();
+        menu.Add("添加网页应用…", () => PromptAddWebApp());
         menu.Add(Loc.T("Quit {0}", AppInfo.Name), () => Application.Current.Shutdown());
         return menu;
+    }
+
+    /// <summary>弹小窗输入名称/网址，然后用浏览器应用模式加一个 Dock 项。</summary>
+    void PromptAddWebApp()
+    {
+        var answer = AddWebAppDialog.Ask(this);
+        if (answer is null) return;
+        AddWebApp(answer.Value.Name, answer.Value.Url);
+    }
+
+    /// <summary>把网页应用加进 Dock：Target 用浏览器，Arguments 用 --app=URL（无地址栏、独立任务栏项）。</summary>
+    internal void AddWebApp(string name, string url)
+    {
+        string? browser = FindBrowser();
+        if (browser is null) { Log.Info("WebApp: no Chrome/Edge found"); return; }
+
+        var config = new DockItemConfig
+        {
+            Name = name,
+            Target = browser,
+            Arguments = "--app=" + url + " --window-size=1280,880",
+        };
+        _pinned.Add(new DockItem(config));
+        CommitPinnedOrder();
+        RebuildEntries();
+        SyncWindows();
+        UpdateFrame();
+        Log.Info($"WebApp: pinned <{name}> -> {url}");
+    }
+
+    static string? FindBrowser()
+    {
+        string[] candidates =
+        {
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "Application", "chrome.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
+        };
+        foreach (var candidate in candidates) if (File.Exists(candidate)) return candidate;
+        return null;
     }
 
     void SetHovered(bool hovered)
@@ -1967,6 +2092,8 @@ internal sealed class DockWindow : Window
             _appBar?.Reregister();
         }
         Theme.Refresh();
+
+
         ApplyTheme();
         _tracker?.RefreshNow();
         SyncWindows();
