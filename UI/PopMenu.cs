@@ -90,6 +90,12 @@ internal sealed class PopMenu : IDisposable
         _watch.Tick += (_, _) => Watch();
     }
 
+    /// <summary>
+    /// 宽松排版：行更高、图标更大、左右留白更多（对齐 Windows 11 的电源菜单）。
+    /// Dock 的右键菜单保持紧凑，只有系统菜单打开它。
+    /// </summary>
+    public bool Airy { get; set; }
+
     public event Action? Closed;
 
     public bool IsOpen => _window.IsVisible;
@@ -104,9 +110,9 @@ internal sealed class PopMenu : IDisposable
     static Brush HoverBrush => Theme.IsDark ? Frozen(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)) : Frozen(Color.FromArgb(0x1C, 0x00, 0x00, 0x00));
 
     // ── 构建 ──────────────────────────────────────────────────────────────
-    public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null)
+    public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null, string? glyph = null)
     {
-        var row = Row(header, isChecked, enabled, gesture, out _);
+        var row = Row(header, isChecked, enabled, gesture, glyph, out _);
         row.MouseLeftButtonUp += (_, e) =>
         {
             e.Handled = true;
@@ -150,7 +156,7 @@ internal sealed class PopMenu : IDisposable
         var child = new PopMenu { _parent = this };
         child.Closed += () => _leavingToChild = false;
 
-        var row = Row(header, false, true, null, out var chevron);
+        var row = Row(header, false, true, null, null, out var chevron);
         chevron.Visibility = Visibility.Visible;
         row.MouseEnter += (_, _) =>
         {
@@ -163,7 +169,7 @@ internal sealed class PopMenu : IDisposable
         return child;
     }
 
-    Border Row(string header, bool isChecked, bool enabled, string? gesture, out TextBlock chevron)
+    Border Row(string header, bool isChecked, bool enabled, string? gesture, string? glyph, out TextBlock chevron)
     {
         var grid = new Grid { Background = Brushes.Transparent };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
@@ -171,13 +177,15 @@ internal sealed class PopMenu : IDisposable
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
 
+        // 有 glyph 就用 Windows 自己的图标字形（Segoe Fluent Icons），否则回落到对勾
         var check = new TextBlock
         {
-            Text = "\u2713",
-            FontFamily = Typo.Ui,
-            FontSize = 12,
+            Text = glyph ?? "\u2713",
+            FontFamily = glyph is null ? Typo.Ui : new FontFamily("Segoe Fluent Icons"),
+            FontSize = glyph is null ? 12 : 13,
             VerticalAlignment = VerticalAlignment.Center,
-            Visibility = isChecked ? Visibility.Visible : Visibility.Hidden,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Visibility = (glyph is not null || isChecked) ? Visibility.Visible : Visibility.Hidden,
             Foreground = Frozen(Theme.IsDark ? Color.FromArgb(0xFF, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xFF, 0x1D, 0x1D, 0x20)),
         };
         Typo.Crisp(check);
@@ -188,6 +196,7 @@ internal sealed class PopMenu : IDisposable
             Text = header,
             FontFamily = Typo.Ui,
             FontSize = 13,
+            Margin = new Thickness(Airy ? 12 : 0, 0, 0, 0),   // 只有"图标↔文字"的间距变大
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = Frozen(Theme.IsDark ? Color.FromArgb(0xF2, 0xF2, 0xF5, 0xFF) : Color.FromArgb(0xFF, 0x1D, 0x1D, 0x20)),
             MaxWidth = MaxWidth,

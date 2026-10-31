@@ -27,8 +27,16 @@ internal sealed class DockMenu
 
     public event Action? Closed;
 
-    public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null) =>
-        _menu.Add(header, () => { _actionTaken = true; action(); }, isChecked, enabled, gesture);
+    /// <summary>宽松排版（对齐 Windows 11 弹窗的间距）。</summary>
+    public bool Airy { get => _menu.Airy; set => _menu.Airy = value; }
+
+    /// <summary>菜单当前是否开着（单按 Win 要能"再按一下关掉"）。</summary>
+    public bool IsOpen => _menu.IsOpen;
+
+    public void Close() => _menu.Close();
+
+    public void Add(string header, Action action, bool isChecked = false, bool enabled = true, string? gesture = null, string? glyph = null) =>
+        _menu.Add(header, () => { _actionTaken = true; action(); }, isChecked, enabled, gesture, glyph);
 
     public void AddSeparator() => _menu.AddSeparator();
 

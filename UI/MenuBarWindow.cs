@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -80,11 +81,8 @@ internal sealed class MenuBarWindow : Window
         // 左键 = 启动台（我们自己的）。不再拉 Windows 开始菜单：碰它一次，SearchHost /
         // StartMenuExperienceHost / TextInputHost 就会常驻（合计约 430MB）。
         // 需要原生开始菜单：Shift + 左键；右键仍是 Win+X 快捷菜单。
-        _logo.MouseLeftButtonUp += (_, _) =>
-        {
-            if ((System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0) StartMenu.Toggle();
-            else LaunchpadWindow.Open();
-        };
+        // 左键 = 原生开始菜单（自制电源菜单已按用户要求删除）
+        _logo.MouseLeftButtonUp += (_, _) => StartMenu.Toggle();
         _logo.MouseRightButtonUp += (_, _) => StartMenu.ShowQuickLinkMenu();
 
         _appName = Text("", 13, FontWeights.SemiBold); // macOS 用半粗：13 Bold 在 150% 缩放下会糊成一团
@@ -140,7 +138,7 @@ internal sealed class MenuBarWindow : Window
         right.Children.Add(_clock);
 
         // 每 500ms 跟一次前台窗口的输入法状态（读一次 IME 转换模式，几乎零成本）
-        _inputTimer.Interval = TimeSpan.FromMilliseconds(500);
+        _inputTimer.Interval = TimeSpan.FromMilliseconds(150);
         _inputTimer.Tick += (_, _) => UpdateInputLabel();
         _inputTimer.Start();
 
@@ -347,6 +345,9 @@ internal sealed class MenuBarWindow : Window
             });
     }
 
+    /// <summary>前台变了：应用名与输入法状态一起立刻刷新（不等下一次轮询）。</summary>
+    public void RefreshInputLabel() => UpdateInputLabel();
+
     public void ShowAppName(string name)
     {
         if (_appName.Text == name) return;
@@ -470,6 +471,8 @@ internal sealed class MenuBarWindow : Window
     }
 
     /// <summary>A menu-bar item: rounded highlight under the pointer, like the Mac's menu extras.</summary>
+
+
     Border Clickable(UIElement child, double padding)
     {
         var b = new Border

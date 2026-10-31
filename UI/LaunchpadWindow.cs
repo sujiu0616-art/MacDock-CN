@@ -94,6 +94,10 @@ internal sealed class LaunchpadWindow : Window
     DateTime _openedAt;   // 点空白关闭的宽限期起点（见 backdrop 的点击处理）
     bool _closing;
 
+    // 退场动画的兜底：动画 Completed 有可能不触发（窗口被遮挡、渲染时钟停了），
+    // 那时 _closing 会永远为 true，之后再按 Esc 就被 "if (_closing) return" 挡住 —— 只能重启。
+    readonly System.Windows.Threading.DispatcherTimer _closeWatchdog = new() { Interval = TimeSpan.FromMilliseconds(700) };
+
     LaunchpadWindow()
     {
         // 配色跟系统主题走（macOS 的启动台也是）：深色=暗玻璃+白字，浅色=白玻璃+深字。
@@ -249,6 +253,11 @@ internal sealed class LaunchpadWindow : Window
         _root.RenderTransform = new TransformGroup { Children = { new ScaleTransform(_fit, _fit), _entrance } };
         Content = _root;
 
+        _closeWatchdog.Tick += (_, _) =>
+        {
+            _closeWatchdog.Stop();
+            if (IsVisible) CloseNow();
+        };
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(Place);
         Start();
     }
@@ -348,7 +357,13 @@ internal sealed class LaunchpadWindow : Window
     /// <summary>Esc、启动、点空白处都走这里：先播完退场动画再真的关。</summary>
     public new void Close()
     {
-        if (_closing) return;
+        // 已经请求过关闭：说明上一次多半卡在退场动画上，直接硬关（这就是"关不掉"的根因）
+        if (_closing)
+        {
+            _closeWatchdog.Stop();
+            CloseNow();
+            return;
+        }
         _closing = true;
         _cancel.Cancel();
         if (!_shown)
@@ -357,6 +372,7 @@ internal sealed class LaunchpadWindow : Window
             return;
         }
         AnimateOut();
+        _closeWatchdog.Start();
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -370,7 +386,11 @@ internal sealed class LaunchpadWindow : Window
         base.OnClosing(e);
     }
 
-    void CloseNow() => base.Close();
+    void CloseNow()
+    {
+        _closeWatchdog.Stop();
+        base.Close();
+    }
 
     static readonly CubicEase SmoothIn = new() { EasingMode = EasingMode.EaseOut };
     static readonly CubicEase SmoothOut = new() { EasingMode = EasingMode.EaseIn };

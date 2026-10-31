@@ -304,7 +304,7 @@ internal sealed class DockWindow : Window
                 }
                 else
                 {
-                    SetFullscreen(DetectFullscreenApp());
+                    if (!ShellHoldActive()) SetFullscreen(DetectFullscreenApp());
                 }
             }
             CheckStuckTaskSwitcher();
@@ -332,7 +332,7 @@ internal sealed class DockWindow : Window
                     }
                     else
                     {
-                        SetFullscreen(DetectFullscreenApp());
+                        if (!ShellHoldActive()) SetFullscreen(DetectFullscreenApp());
                     }
                 }
             }), System.Windows.Threading.DispatcherPriority.Input));
@@ -348,7 +348,16 @@ internal sealed class DockWindow : Window
 
         _followTimer.Tick += (_, _) => FollowPointer();
         _shellGuard.Interval = TimeSpan.FromSeconds(5);
-        _shellGuard.Tick += (_, _) => EnsureShellVisible();
+        _shellGuard.Tick += (_, _) =>
+        {
+            EnsureShellVisible();
+            // 低级钩子会被 Windows 在异常情况下悄悄摘掉；掉了就重装，保证 Win/F4 一直可用
+            if (!KeyLauncher.HookAlive)
+            {
+                Log.Info("Key hook lost - reinstalling");
+                KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+            }
+        };
 
         // 空闲 trim：20 秒没动画、没菜单、启动台没开，就把工作集交还系统
         _idleTrim.Interval = TimeSpan.FromSeconds(20);
@@ -423,10 +432,28 @@ internal sealed class DockWindow : Window
         StartTrashWatch();
 
         DockConfig.SafeMode = _config.Settings.SafeMode;
-        // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
-        // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
-        if (_config.Settings.LaunchpadKey != 0)
-            KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
+        // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
+        KeyLauncher.OnWinDown = () =>
+        {
+            _winHoldUntil = Environment.TickCount64 + 600;   // 1.5s 内不许收起（开始菜单弹出需要时间）
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            if (_fullscreen) SetFullscreen(false, immediate: true);
+            EnsureShellVisible();
+            sw.Stop();
+            if (sw.ElapsedMilliseconds > 30) Log.Info($"Win key: shell restore took {sw.ElapsedMilliseconds}ms");
+        };
+        KeyLauncher.OnLaunchpadTap = () =>
+        {
+            if (_fullscreen)
+            {
+                Log.Info("Launchpad key ignored: a fullscreen app is in front");
+                return;
+            }
+            if (LaunchpadWindow.IsOpen) LaunchpadWindow.CloseIfOpen();
+            else LaunchpadWindow.Open();
+        };
+        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _tracker = new WindowTracker(_hwnd);
         _tracker.MinimizeTarget = MinimizeTargetFor;
         _tracker.Changed += SyncWindows;
@@ -2106,10 +2133,27 @@ internal sealed class DockWindow : Window
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
         DockConfig.SafeMode = _config.Settings.SafeMode;
-        // F4 这类快捷键**不受安全模式影响**：键盘钩子现在跑在独立线程上（不占 UI 线程），
-        // 已经不具备"卡住全系统输入"的风险，所以只要配了 LaunchpadKey 就装上。
-        if (_config.Settings.LaunchpadKey != 0)
-            KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
+        // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
+        // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
+        KeyLauncher.OnWinDown = () =>
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            if (_fullscreen) SetFullscreen(false, immediate: true);
+            EnsureShellVisible();
+            sw.Stop();
+            if (sw.ElapsedMilliseconds > 30) Log.Info($"Win key: shell restore took {sw.ElapsedMilliseconds}ms");
+        };
+        KeyLauncher.OnLaunchpadTap = () =>
+        {
+            if (_fullscreen)
+            {
+                Log.Info("Launchpad key ignored: a fullscreen app is in front");
+                return;
+            }
+            if (LaunchpadWindow.IsOpen) LaunchpadWindow.CloseIfOpen();
+            else LaunchpadWindow.Open();
+        };
+        KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _menuBars?.SetPaused(false);
         _trashTimer?.Start();
         Revalidate();
@@ -2486,19 +2530,45 @@ internal sealed class DockWindow : Window
     };
 
     DateTime _fullscreenWantedSince = DateTime.MinValue;
+
+    // 按 Win 之后的"免收起"窗口期：这期间心跳不许把刚放出来的菜单栏/Dock 再收回去。
+    // 真因：开始菜单要几十毫秒才拿到前台，这中间心跳看到前台还是全屏游戏 → 立刻收起 → "闪一下".
+    long _winHoldUntil;
+    bool _startWasOnScreen;   // 开始菜单出现过：等它一关就立刻恢复判断，不再空等
+
     // 收起前的确认时间。早期是 1.5s（挡开机临时全屏），后来为了压误判加到 3s；
     // 但误判的真因（最大化窗口 / 铺满工作区 / 直接采信 ABN_FULLSCREENAPP）都已各自修好，
     // 3s 只会让播放器全屏时 Dock 迟迟不收起（实测用户直接感知为"消失得很慢"）。
     // 现在 0.25s：既不会误收，又基本无感。
     const double FullscreenDebounceSeconds = 0.05;
 
-    /// <summary>
-    /// 收起 / 放回 Dock 与菜单栏。
-    /// 收起前要求"全屏"这个判断连续成立 1.5 秒（消抖）：开机时瞬间出现的临时全屏窗口、
-    /// Alt+Tab 的中间帧都不会再让 Dock 闪一下；放回则立即执行。
-    /// </summary>
-    /// 任务栏被隐藏后 Explorer 不一定还会发这个通知。
-    /// </summary>
+
+    /// <summary>现在是否处于"按了 Win，先别收起"的窗口期（开始菜单在屏幕上时顺延）。</summary>
+    bool ShellHoldActive()
+    {
+        bool startNow = StartMenuOnScreen();
+        if (startNow)
+        {
+            _startWasOnScreen = true;
+            _winHoldUntil = Environment.TickCount64 + 800;   // 菜单开着就一直顺延
+        }
+        else if (_startWasOnScreen)
+        {
+            // 开始菜单刚关掉：立刻结束窗口期，让全屏判断马上接管
+            _startWasOnScreen = false;
+            _winHoldUntil = 0;
+        }
+        return Environment.TickCount64 < _winHoldUntil;
+    }
+
+    bool StartMenuOnScreen()
+    {
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        string cls = GetClassName(fg);
+        return cls is "XamlExplorerHostIslandWindow" or "Windows.UI.Core.CoreWindow" or "MultitaskingViewFrame";
+    }
+
     void SetFullscreen(bool fullscreen, bool immediate = false)
     {
         if (fullscreen && _fullscreen != fullscreen && !immediate)
