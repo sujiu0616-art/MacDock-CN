@@ -45,19 +45,34 @@ internal sealed class DockWindow : Window
     readonly Canvas _canvas = new();
     readonly Rectangle _hitArea = new() { Fill = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) };
     // The plate's own edges: DWM gives the glass its blur, nothing in it gives a rim, a sheen or a shadow.
-    readonly Border _plateShadow = new()
+    // 阴影三层叠加：外圈最宽最淡、内圈最窄最深 → 不用 BlurEffect 也能得到自然衰减，
+    // 单层同 alpha 的环一旦看边角就是一整圈"相框"。
+    static readonly double[] PlateShadowBands = { PlateShadowBand, PlateShadowBand * 0.62, PlateShadowBand * 0.3 };
+    static readonly double[] PlateShadowAlphas = { 0.32, 0.55, 1.0 };
+    readonly Border[] _plateShadows = { NewShadowLayer(0), NewShadowLayer(1), NewShadowLayer(2) };
+
+    static Border NewShadowLayer(int index) => new()
     {
         IsHitTestVisible = false,
         Visibility = Visibility.Collapsed,
-        BorderThickness = new Thickness(PlateShadowBand),
-        // 原来这里挂 BlurEffect（软件光栅化，每帧重算）。改用纯半透明深色带：肉眼几乎无差，成本归零。
+        BorderThickness = new Thickness(PlateShadowBands[index]),
     };
+
     readonly Border _plateRim = new()
     {
         IsHitTestVisible = false,
         Visibility = Visibility.Collapsed,
         BorderThickness = new Thickness(1),
     };
+    // 内沿第二道高光：macOS 的玻璃是"上边厚一点"，只有外沿一条线看起来像贴纸
+    readonly Rectangle _plateInnerSheen = new()
+    {
+        IsHitTestVisible = false,
+        Visibility = Visibility.Collapsed,
+        RadiusX = 1,
+        RadiusY = 1,
+    };
+
     readonly Rectangle _plateHighlight = new()
     {
         IsHitTestVisible = false,
@@ -216,8 +231,9 @@ internal sealed class DockWindow : Window
 
         // Under the icons (added first): a magnified icon reaches above the plate and must not be crossed by the rim.
         _canvas.Children.Add(_hitArea);
-        _canvas.Children.Add(_plateShadow);
+        foreach (var layer in _plateShadows) _canvas.Children.Add(layer);
         _canvas.Children.Add(_plateRim);
+        _canvas.Children.Add(_plateInnerSheen);
         _canvas.Children.Add(_plateHighlight);
         _canvas.Children.Add(_label);
         foreach (var itemConfig in config.Items) _pinned.Add(new DockItem(itemConfig));
@@ -908,14 +924,16 @@ internal sealed class DockWindow : Window
     {
         bool shown = plate.Width > 0.5 && plate.Height > 0.5;
         var visibility = shown ? Visibility.Visible : Visibility.Collapsed;
-        _plateRim.Visibility = _plateShadow.Visibility = _plateHighlight.Visibility = visibility;
+        _plateRim.Visibility = _plateHighlight.Visibility = _plateInnerSheen.Visibility = visibility;
+        foreach (var layer in _plateShadows) layer.Visibility = visibility;
         if (!shown) return;
 
         // Snapped to whole screen pixels: a hairline that falls between two pixels is drawn as two grey ones.
         double Snap(double v) => Math.Round(v * _scale) / _scale;
         var rim = new Rect(Snap(plate.Left), Snap(plate.Top), Math.Max(0, Snap(plate.Right) - Snap(plate.Left)),
             Math.Max(0, Snap(plate.Bottom) - Snap(plate.Top)));
-        double radius = _m.PlateRadius;
+        // 玻璃层用的整数像素半径（见 SetGlassRadius），这里对齐到同一栅格，圆角才没有台阶
+        double radius = Math.Round(_m.PlateRadius * _scale) / _scale;
 
         _plateRim.CornerRadius = new CornerRadius(radius);
         _plateRim.Width = rim.Width;
@@ -923,20 +941,38 @@ internal sealed class DockWindow : Window
         Canvas.SetLeft(_plateRim, rim.Left);
         Canvas.SetTop(_plateRim, rim.Top);
 
-        // The border stroke sits inside the element, so the shadow widens the element by its own band and strokes that.
+        // The border stroke sits inside the element, so each shadow layer widens the element by its own band.
         // 但只在**朝屏幕边缘**的那几边长：朝屏幕内部的一侧收到板边，否则投影会盖到窗口内容上。
-        _plateShadow.CornerRadius = new CornerRadius(radius + PlateShadowBand);
-        double growUp = Edge == DockEdge.Bottom ? 0 : PlateShadowBand;     // 上沿
-        double growDown = PlateShadowBand;                                // 下沿（没有顶置 Dock，恒长）
-        double growLeft = Edge == DockEdge.Right ? 0 : PlateShadowBand;    // 左沿
-        double growRight = Edge == DockEdge.Left ? 0 : PlateShadowBand;    // 右沿
-        _plateShadow.Width = rim.Width + growLeft + growRight;
-        _plateShadow.Height = rim.Height + growUp + growDown;
-        Canvas.SetLeft(_plateShadow, rim.Left - growLeft);
-        Canvas.SetTop(_plateShadow, rim.Top - growUp);
+        for (int i = 0; i < _plateShadows.Length; i++)
+        {
+            double band = PlateShadowBands[i];
+            double growUp = Edge == DockEdge.Bottom ? 0 : band;     // 上沿
+            double growDown = band;                                 // 下沿（没有顶置 Dock，恒长）
+            double growLeft = Edge == DockEdge.Right ? 0 : band;    // 左沿
+            double growRight = Edge == DockEdge.Left ? 0 : band;    // 右沿
+            var layer = _plateShadows[i];
+            layer.CornerRadius = new CornerRadius(radius + band);
+            layer.Width = rim.Width + growLeft + growRight;
+            layer.Height = rim.Height + growUp + growDown;
+            Canvas.SetLeft(layer, rim.Left - growLeft);
+            Canvas.SetTop(layer, rim.Top - growUp);
+        }
+
+        // 内沿高光：与外沿等高光平行，往里 2px、左右各缩 2px（圆角处不打架）
+        if (Edge == DockEdge.Bottom)
+        {
+            _plateInnerSheen.Width = Math.Max(0, rim.Width - 2 * (radius * 0.55) - 8);
+            _plateInnerSheen.Height = 1;
+            Canvas.SetLeft(_plateInnerSheen, rim.Left + radius * 0.55 + 4);
+            Canvas.SetTop(_plateInnerSheen, rim.Top + 2);
+        }
+        else
+        {
+            _plateInnerSheen.Visibility = Visibility.Collapsed;
+        }
 
         // The sheen runs along the plate's outer edge, clear of the corners: light comes from above.
-        double along = radius * 0.75;
+        double along = radius * 0.55;
         switch (Edge)
         {
             case DockEdge.Left:
@@ -2783,9 +2819,30 @@ internal sealed class DockWindow : Window
         _label.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1F, 0x00, 0x00, 0x00));
         _labelText.Foreground = new SolidColorBrush(dark ? Color.FromRgb(0xF5, 0xF5, 0xF7) : Color.FromRgb(0x1D, 0x1D, 0x1F));
         // The plate: white 12% rim in the dark, black 22% rim in the light (the glass is bright there).
-        _plateRim.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x38, 0x00, 0x00, 0x00));
-        _plateHighlight.Fill = new SolidColorBrush(dark ? Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
-        _plateShadow.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x45, 0x00, 0x00, 0x00) : Color.FromArgb(0x1A, 0x00, 0x00, 0x00));
+        // 浅色主题的玻璃是亮的：描边只要"存在的暗示"，0x38 会变成一条显眼的深蓝描边
+        _plateRim.BorderBrush = new SolidColorBrush(dark ? Color.FromArgb(0x2A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x2C, 0x00, 0x00, 0x00));
+        var sheen = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
+        byte sheenAlpha = (byte)(dark ? 0x3A : 0x70);
+        sheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 0.00));
+        sheen.GradientStops.Add(new GradientStop(Color.FromArgb(sheenAlpha, 0xFF, 0xFF, 0xFF), 0.12));
+        sheen.GradientStops.Add(new GradientStop(Color.FromArgb(sheenAlpha, 0xFF, 0xFF, 0xFF), 0.88));
+        sheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 1.00));
+        sheen.Freeze();
+        _plateHighlight.Fill = sheen;
+        var innerSheen = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
+        byte innerAlpha = (byte)(dark ? 0x1E : 0x2E);
+        innerSheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 0.00));
+        innerSheen.GradientStops.Add(new GradientStop(Color.FromArgb(innerAlpha, 0xFF, 0xFF, 0xFF), 0.18));
+        innerSheen.GradientStops.Add(new GradientStop(Color.FromArgb(innerAlpha, 0xFF, 0xFF, 0xFF), 0.82));
+        innerSheen.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 1.00));
+        innerSheen.Freeze();
+        _plateInnerSheen.Fill = innerSheen;
+        double shadowAlpha = dark ? 0x4A : 0x18;   // 最内层的不透明度
+        for (int i = 0; i < _plateShadows.Length; i++)
+        {
+            int alpha = (int)Math.Round(shadowAlpha * PlateShadowAlphas[i]);
+            _plateShadows[i].BorderBrush = new SolidColorBrush(Color.FromArgb((byte)Math.Clamp(alpha, 0, 255), 0, 0, 0));
+        }
         foreach (var view in _views.Values) view.Refresh();
         _backdrop.ApplyTheme();
         _menuBars?.ApplyTheme();
