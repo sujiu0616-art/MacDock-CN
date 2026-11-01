@@ -294,17 +294,22 @@ internal sealed class DockWindow : Window
                 // 但"前台变成开始菜单"这个窗口事件照样收得到 —— 所以外壳必须跟着开始菜单走。
                 if (StartMenuOnScreen())
                 {
-                    _startWasOnScreen = true;
-                    _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
-                    if (_fullscreen)
+                    // 正在关菜单（第二次按 Win）时不续期：否则外壳会赖到菜单关掉之后再等 1.2 秒才走
+                    if (!_winClosing)
                     {
-                        Log.Info("Start menu on screen (tick) - surfacing the shell");
-                        SetFullscreen(false, immediate: true);
+                        _startWasOnScreen = true;
+                        _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
+                        if (_fullscreen)
+                        {
+                            Log.Info("Start menu on screen (tick) - surfacing the shell");
+                            SetFullscreen(false, immediate: true);
+                        }
+                        EnsureShellVisible();
                     }
-                    EnsureShellVisible();
                     CheckStuckTaskSwitcher();
                     return;
                 }
+                _winClosing = false;   // 菜单已经不在屏上：清掉"正在关"的标记
                 // 全屏窗口被最小化（Win+D / 显示桌面 / 游戏自己最小化）→ 用户回到了桌面，shell 必须出来
                 if (_fullscreen && _fullscreenOwner != IntPtr.Zero && IsIconic(_fullscreenOwner))
                 {
@@ -339,18 +344,23 @@ internal sealed class DockWindow : Window
                     string? fgClass = GetClassName(GetForegroundWindow());
                     if (StartMenuOnScreen())
                     {
-                        // 同 tick 里的那段：开始菜单出现就放出外壳，不看键盘钩子（UIPI 会挡掉游戏前台时的按键）
-                        _startWasOnScreen = true;
-                        _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
-                        if (_fullscreen)
+                        // 同 tick 里的那段：开始菜单出现就放出外壳，不看键盘钩子（UIPI 会挡掉游戏前台时的按键）。
+                        // 正在关菜单（第二次按 Win）时不续期，让外壳跟着菜单一起收回去。
+                        if (!_winClosing)
                         {
-                            Log.Info("Start menu on screen (event) - surfacing the shell");
-                            SetFullscreen(false, immediate: true);
+                            _startWasOnScreen = true;
+                            _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
+                            if (_fullscreen)
+                            {
+                                Log.Info("Start menu on screen (event) - surfacing the shell");
+                                SetFullscreen(false, immediate: true);
+                            }
+                            EnsureShellVisible();
                         }
-                        EnsureShellVisible();
                     }
                     else if (fgClass is "Progman" or "WorkerW")
                     {
+                        _winClosing = false;   // 菜单已经不在屏上：清掉"正在关"的标记
                         // Win+D / 显示桌面：用户明确要回桌面，全屏判断必须让路
                         if (_fullscreen)
                         {
@@ -361,6 +371,7 @@ internal sealed class DockWindow : Window
                     }
                     else
                     {
+                        _winClosing = false;
                         if (!ShellHoldActive()) SetFullscreen(DetectFullscreenApp());
                     }
                 }
@@ -463,28 +474,8 @@ internal sealed class DockWindow : Window
         DockConfig.SafeMode = _config.Settings.SafeMode;
         // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
-        KeyLauncher.OnWinDown = () =>
-        {
-            // 1.2s 内不许收起：开始菜单要几十毫秒才拿到前台，全屏游戏还会中途把它抢回去一帧，
-            // 600ms 实测不够（燕云全屏下按下 Win 后 159ms 就被收回，用户根本没看见）。
-            _winHoldUntil = Environment.TickCount64 + 1200;
-            Log.Info($"Win key: down (fullscreen={_fullscreen}, hold=1200ms)");   // 时间轴对齐用：钩子到底收没收到一看便知
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            if (_fullscreen) SetFullscreen(false, immediate: true);
-            EnsureShellVisible();
-            sw.Stop();
-            if (sw.ElapsedMilliseconds > 30) Log.Info($"Win key: shell restore took {sw.ElapsedMilliseconds}ms");
-        };
-        KeyLauncher.OnLaunchpadTap = () =>
-        {
-            if (_fullscreen)
-            {
-                Log.Info("Launchpad key ignored: a fullscreen app is in front");
-                return;
-            }
-            if (LaunchpadWindow.IsOpen) LaunchpadWindow.CloseIfOpen();
-            else LaunchpadWindow.Open();
-        };
+        KeyLauncher.OnWinDown = OnWinKeyDown;
+        KeyLauncher.OnLaunchpadTap = OnLaunchpadKey;
         KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _tracker = new WindowTracker(_hwnd);
         _tracker.MinimizeTarget = MinimizeTargetFor;
@@ -2167,27 +2158,8 @@ internal sealed class DockWindow : Window
         DockConfig.SafeMode = _config.Settings.SafeMode;
         // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
-        KeyLauncher.OnWinDown = () =>
-        {
-            // 锁屏/休眠恢复后重装钩子时，这条也要设窗口期 —— 早先漏了它，恢复后按 Win 一样闪一下就没。
-            _winHoldUntil = Environment.TickCount64 + 1200;
-            Log.Info($"Win key: down (fullscreen={_fullscreen}, hold=1200ms)");
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            if (_fullscreen) SetFullscreen(false, immediate: true);
-            EnsureShellVisible();
-            sw.Stop();
-            if (sw.ElapsedMilliseconds > 30) Log.Info($"Win key: shell restore took {sw.ElapsedMilliseconds}ms");
-        };
-        KeyLauncher.OnLaunchpadTap = () =>
-        {
-            if (_fullscreen)
-            {
-                Log.Info("Launchpad key ignored: a fullscreen app is in front");
-                return;
-            }
-            if (LaunchpadWindow.IsOpen) LaunchpadWindow.CloseIfOpen();
-            else LaunchpadWindow.Open();
-        };
+        KeyLauncher.OnWinDown = OnWinKeyDown;
+        KeyLauncher.OnLaunchpadTap = OnLaunchpadKey;
         KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
         _menuBars?.SetPaused(false);
         _trashTimer?.Start();
@@ -2577,6 +2549,51 @@ internal sealed class DockWindow : Window
     // 真因：开始菜单要几十毫秒才拿到前台，这中间心跳看到前台还是全屏游戏 → 立刻收起 → "闪一下".
     long _winHoldUntil;
     bool _startWasOnScreen;   // 开始菜单出现过：等它一关就立刻恢复判断，不再空等
+    bool _winClosing;         // 这次按 Win 是去"关"开始菜单：菜单在场期间不再续窗口期（否则外壳赖着不走）
+    long _lastWinOpenAt;      // 上次"开菜单"的按键时刻：用来把按住 Win 的自动重复排除掉
+
+    /// <summary>
+    /// 按 Win 的统一处理（钩子线程 → UI 线程）。启动与"锁屏恢复"两处安装点都指向这里，
+    /// 免得再出现"其中一份漏掉窗口期"那种分叉（2026-11-01 就踩过一次）。
+    /// </summary>
+    void OnWinKeyDown()
+    {
+        long now = Environment.TickCount64;
+        // 开始菜单此刻已经在屏 = 这次按 Win 是去关它。按住 Win 的自动重复也会走到这里，
+        // 用"距上次开菜单超过 600ms"把重复按键排除，否则长按会把自己刚设的窗口期打断。
+        if (StartMenuOnScreen() && now - _lastWinOpenAt > 600)
+        {
+            _winClosing = true;
+            _startWasOnScreen = false;
+            _winHoldUntil = now + 150;   // 关菜单不需要长窗口期：外壳跟着一起收回去，别赖在桌上
+            Log.Info("Win key: closing the start menu - shell follows");
+            return;
+        }
+
+        _lastWinOpenAt = now;
+        _winClosing = false;
+        // 1.2s 内不许收起：开始菜单要几十毫秒才拿到前台，全屏游戏还会中途把它抢回去一帧，
+        // 600ms 实测不够（燕云全屏下按下 Win 后 159ms 就被收回，用户根本没看见）。
+        _winHoldUntil = now + 1200;
+        Log.Info($"Win key: down (fullscreen={_fullscreen}, hold=1200ms)");   // 时间轴对齐用：钩子到底收没收到一看便知
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (_fullscreen) SetFullscreen(false, immediate: true);
+        EnsureShellVisible();
+        sw.Stop();
+        if (sw.ElapsedMilliseconds > 30) Log.Info($"Win key: shell restore took {sw.ElapsedMilliseconds}ms");
+    }
+
+    /// <summary>启动台热键（F4）：全屏应用在前台时不响应。两处安装点共用。</summary>
+    void OnLaunchpadKey()
+    {
+        if (_fullscreen)
+        {
+            Log.Info("Launchpad key ignored: a fullscreen app is in front");
+            return;
+        }
+        if (LaunchpadWindow.IsOpen) LaunchpadWindow.CloseIfOpen();
+        else LaunchpadWindow.Open();
+    }
 
     // 收起前的确认时间。早期是 1.5s（挡开机临时全屏），后来为了压误判加到 3s；
     // 但误判的真因（最大化窗口 / 铺满工作区 / 直接采信 ABN_FULLSCREENAPP）都已各自修好，
@@ -2588,6 +2605,8 @@ internal sealed class DockWindow : Window
     /// <summary>现在是否处于"按了 Win，先别收起"的窗口期（开始菜单在屏幕上时顺延）。</summary>
     bool ShellHoldActive()
     {
+        // 正在关开始菜单：既不续期也不回退，让那 150ms 的收尾窗口照原样走完
+        if (_winClosing) return Environment.TickCount64 < _winHoldUntil;
         bool startNow = StartMenuOnScreen();
         long now = Environment.TickCount64;
         if (startNow)
