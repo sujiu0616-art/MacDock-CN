@@ -436,7 +436,9 @@ internal sealed class DockWindow : Window
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
         KeyLauncher.OnWinDown = () =>
         {
-            _winHoldUntil = Environment.TickCount64 + 600;   // 1.5s 内不许收起（开始菜单弹出需要时间）
+            // 1.2s 内不许收起：开始菜单要几十毫秒才拿到前台，全屏游戏还会中途把它抢回去一帧，
+            // 600ms 实测不够（燕云全屏下按下 Win 后 159ms 就被收回，用户根本没看见）。
+            _winHoldUntil = Environment.TickCount64 + 1200;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             if (_fullscreen) SetFullscreen(false, immediate: true);
             EnsureShellVisible();
@@ -2363,6 +2365,10 @@ internal sealed class DockWindow : Window
     void EnforceFullscreenInvariant()
     {
         if (_launchpadOpen || _hwnd == IntPtr.Zero) return;
+        // 抖振保护期内不碰窗口：这段时间 _fullscreen 是冻结的，照着它强同步只会变成每 tick 一轮"藏→显→藏"。
+        if (Environment.TickCount64 < _fullscreenSuspendUntil) return;
+        // 按 Win 之后的窗口期一律让路：用户主动要外壳出来，不能被全屏判定推翻。
+        if (ShellHoldActive()) return;
         bool hide = _fullscreen;
         bool dockVisible = IsWindowVisible(_hwnd);
 
@@ -2452,6 +2458,9 @@ internal sealed class DockWindow : Window
 
     void OnFullscreenApp(bool fullscreen)
     {
+        // 按 Win 之后 Explorer 仍会补发"有窗口盖住 app bar"，这条快速通道不看窗口期就会
+        // 把刚放出来的菜单栏/Dock 立刻收回 —— 必须先让路，窗口期过了再按真实状态判断。
+        if (ShellHoldActive()) return;
         if (!fullscreen) { SetFullscreen(false); return; }
 
         // 快速通道：Explorer 说"有窗口盖住了 app bar"。它由别的窗口压到我们地盘触发，
@@ -2547,16 +2556,19 @@ internal sealed class DockWindow : Window
     bool ShellHoldActive()
     {
         bool startNow = StartMenuOnScreen();
+        long now = Environment.TickCount64;
         if (startNow)
         {
             _startWasOnScreen = true;
-            _winHoldUntil = Environment.TickCount64 + 800;   // 菜单开着就一直顺延
+            _winHoldUntil = now + 800;   // 菜单开着就一直顺延
         }
         else if (_startWasOnScreen)
         {
-            // 开始菜单刚关掉：立刻结束窗口期，让全屏判断马上接管
+            // 菜单"看起来消失了"。这里**不能**把窗口期清零：全屏游戏抢回前台的那一帧
+            // 也会走到这里，清 0 等于按 Win 的保护当场作废（燕云实测：外壳只活了 159ms）。
+            // 改成再给 350ms 宽限，跨过"菜单渲染中/游戏抢焦点"的空档。
             _startWasOnScreen = false;
-            _winHoldUntil = 0;
+            _winHoldUntil = Math.Max(_winHoldUntil, now + 350);
         }
         return Environment.TickCount64 < _winHoldUntil;
     }
@@ -2585,18 +2597,28 @@ internal sealed class DockWindow : Window
         // 每次都跟着收/放，等于让 Explorer 的 appbar 链不停地忙 —— 用户会看到"窗口偶尔没反应"。
         var nowTicks = Environment.TickCount64;
         while (_fullscreenToggles.Count > 0 && nowTicks - _fullscreenToggles[0] > 15000) _fullscreenToggles.RemoveAt(0);
-        if (nowTicks < _fullscreenSuspendUntil)
+        if (nowTicks < _fullscreenSuspendUntil && !immediate)
         {
+            // 冻结状态：这里**不要**写 _fullscreen。写了之后自愈路径（不变量 / EnsureShellVisible）
+            // 会照着被污染的状态反复搬窗口 —— 日志里每秒一次的"藏了又显示"就是这么来的。
             Log.Info($"Fullscreen: ignored ({fullscreen}) - flapping guard active");
-            _fullscreen = fullscreen;   // 记住状态，但不真的动窗口
             return;
         }
-        _fullscreenToggles.Add(nowTicks);
-        if (_fullscreenToggles.Count > 4)
+        if (immediate)
         {
-            _fullscreenSuspendUntil = nowTicks + 30000;
+            // 用户显式操作（按 Win / 回到桌面）打断抖振保护，且不计入抖振统计
+            _fullscreenSuspendUntil = 0;
             _fullscreenToggles.Clear();
-            Log.Info("Fullscreen: toggling too often - suspending fullscreen handling for 30s");
+        }
+        else
+        {
+            _fullscreenToggles.Add(nowTicks);
+            if (_fullscreenToggles.Count > 4)
+            {
+                _fullscreenSuspendUntil = nowTicks + 30000;
+                _fullscreenToggles.Clear();
+                Log.Info("Fullscreen: toggling too often - suspending fullscreen handling for 30s");
+            }
         }
         Log.Info(fullscreen
             ? $"Fullscreen: True (waited {(DateTime.UtcNow - _fullscreenWantedSince).TotalMilliseconds:0}ms{(immediate ? ", fast path" : "")}) <- {DescribeForeground()}"
