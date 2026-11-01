@@ -288,6 +288,23 @@ internal sealed class DockWindow : Window
             if (!_launchpadOpen)
             {
                 string? fgClass = GetClassName(GetForegroundWindow());
+                // 原生开始菜单 / 任务视图出现 = 用户按了 Win 或 Alt+Tab。
+                // 这条驱动**不依赖键盘钩子**：全屏游戏以管理员权限运行时（燕云 launcher 的 manifest
+                // 就是 requireAdministrator），我们普通权限装的高级键盘钩子收不到它的按键（UIPI），
+                // 但"前台变成开始菜单"这个窗口事件照样收得到 —— 所以外壳必须跟着开始菜单走。
+                if (StartMenuOnScreen())
+                {
+                    _startWasOnScreen = true;
+                    _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
+                    if (_fullscreen)
+                    {
+                        Log.Info("Start menu on screen (tick) - surfacing the shell");
+                        SetFullscreen(false, immediate: true);
+                    }
+                    EnsureShellVisible();
+                    CheckStuckTaskSwitcher();
+                    return;
+                }
                 // 全屏窗口被最小化（Win+D / 显示桌面 / 游戏自己最小化）→ 用户回到了桌面，shell 必须出来
                 if (_fullscreen && _fullscreenOwner != IntPtr.Zero && IsIconic(_fullscreenOwner))
                 {
@@ -320,7 +337,19 @@ internal sealed class DockWindow : Window
                 if (!_launchpadOpen)
                 {
                     string? fgClass = GetClassName(GetForegroundWindow());
-                    if (fgClass is "Progman" or "WorkerW")
+                    if (StartMenuOnScreen())
+                    {
+                        // 同 tick 里的那段：开始菜单出现就放出外壳，不看键盘钩子（UIPI 会挡掉游戏前台时的按键）
+                        _startWasOnScreen = true;
+                        _winHoldUntil = Math.Max(_winHoldUntil, Environment.TickCount64 + 800);
+                        if (_fullscreen)
+                        {
+                            Log.Info("Start menu on screen (event) - surfacing the shell");
+                            SetFullscreen(false, immediate: true);
+                        }
+                        EnsureShellVisible();
+                    }
+                    else if (fgClass is "Progman" or "WorkerW")
                     {
                         // Win+D / 显示桌面：用户明确要回桌面，全屏判断必须让路
                         if (_fullscreen)
@@ -439,6 +468,7 @@ internal sealed class DockWindow : Window
             // 1.2s 内不许收起：开始菜单要几十毫秒才拿到前台，全屏游戏还会中途把它抢回去一帧，
             // 600ms 实测不够（燕云全屏下按下 Win 后 159ms 就被收回，用户根本没看见）。
             _winHoldUntil = Environment.TickCount64 + 1200;
+            Log.Info($"Win key: down (fullscreen={_fullscreen}, hold=1200ms)");   // 时间轴对齐用：钩子到底收没收到一看便知
             var sw = System.Diagnostics.Stopwatch.StartNew();
             if (_fullscreen) SetFullscreen(false, immediate: true);
             EnsureShellVisible();
@@ -2139,6 +2169,9 @@ internal sealed class DockWindow : Window
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
         KeyLauncher.OnWinDown = () =>
         {
+            // 锁屏/休眠恢复后重装钩子时，这条也要设窗口期 —— 早先漏了它，恢复后按 Win 一样闪一下就没。
+            _winHoldUntil = Environment.TickCount64 + 1200;
+            Log.Info($"Win key: down (fullscreen={_fullscreen}, hold=1200ms)");
             var sw = System.Diagnostics.Stopwatch.StartNew();
             if (_fullscreen) SetFullscreen(false, immediate: true);
             EnsureShellVisible();
@@ -2560,7 +2593,7 @@ internal sealed class DockWindow : Window
         if (startNow)
         {
             _startWasOnScreen = true;
-            _winHoldUntil = now + 800;   // 菜单开着就一直顺延
+            _winHoldUntil = Math.Max(_winHoldUntil, now + 800);   // 菜单开着就一直顺延（不回退已有的窗口期）
         }
         else if (_startWasOnScreen)
         {
@@ -2578,7 +2611,19 @@ internal sealed class DockWindow : Window
         var fg = GetForegroundWindow();
         if (fg == IntPtr.Zero) return false;
         string cls = GetClassName(fg);
-        return cls is "XamlExplorerHostIslandWindow" or "Windows.UI.Core.CoreWindow" or "MultitaskingViewFrame";
+        if (cls is not ("XamlExplorerHostIslandWindow" or "Windows.UI.Core.CoreWindow" or "MultitaskingViewFrame"))
+            return false;
+        // Windows.UI.Core.CoreWindow 这个类太泛（设置、输入法候选、UWP 都用它），必须再按进程收窄：
+        // 只认开始菜单/搜索/任务视图这几个 shell 宿主，否则游戏里打字弹出输入法也会被当成开始菜单，
+        // 白白把全屏游戏的 Dock 拉出来。
+        try
+        {
+            GetWindowThreadProcessId(fg, out uint pid);
+            string proc = ProcessNameOf(pid);
+            return proc is "SearchHost" or "SearchApp" or "StartMenuExperienceHost"
+                           or "ShellExperienceHost" or "ShellHost" or "explorer";
+        }
+        catch (Exception) { return false; }
     }
 
     void SetFullscreen(bool fullscreen, bool immediate = false)
