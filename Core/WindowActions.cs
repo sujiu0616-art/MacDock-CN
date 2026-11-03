@@ -15,7 +15,9 @@ internal static class WindowActions
     /// <summary>Restores (if minimized) and brings a window to the front.</summary>
     public static void Activate(IntPtr hwnd)
     {
-        // 句柄可能是托盘消息窗口 / tooltip 这类假窗口：先按进程把真正的主窗口叫回来。
+        // 句柄可能是托盘消息窗口 / tooltip / Electron 的内部 Chromium 窗口这类假窗口：
+        // 先按进程把真正的主窗口叫回来。叫不回来就继续按原句柄走，别在这里提前收工
+        // （早先直接 return，结果"应用有窗口但唤不起来"时什么都不做）。
         if (!IsWindowVisible(hwnd) || GetWindowTextLength(hwnd) == 0)
         {
             GetWindowThreadProcessId(hwnd, out uint owner);
@@ -195,32 +197,46 @@ internal static class WindowActions
         if (revealed.Count == 0) return false;
         foreach (var hwnd in revealed)
         {
-            ShowWindowAsync(hwnd, SW_RESTORE);
-            ShowWindowAsync(hwnd, 5);   // SW_SHOW
+            // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，下面那行可见性检查会读到旧状态，
+            // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
+            // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走 —— 窗口出来了却点不动。
+            ShowWindow(hwnd, SW_RESTORE);
+            if (!IsWindowVisible(hwnd)) ShowWindow(hwnd, 5);   // SW_SHOW
+            if (!IsWindowVisible(hwnd))
+                SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | 0x0040 /* SWP_SHOWWINDOW */);
         }
+
         // 走和主路径同一套降级链：早先这里只有 SetForegroundWindow + SwitchToThisWindow，
         // 少一档 AttachThreadInput/SetFocus，于是"从 Dock 唤起最小化的窗口"经常只是显示、不接管输入。
-        if (ForceForeground(revealed[0])) ConfirmForeground(revealed[0]);
+        var target = revealed.Find(h => IsWindowVisible(h) && !IsIconic(h));
+        if (target != IntPtr.Zero)
+        {
+            ForceForeground(target);
+            ConfirmForeground(target);
+        }
 
         // 提权进程（UIPI）会无视我们的 ShowWindow：确认一下有没有真的显示出来，把结论写进日志。
         bool shown = revealed.Exists(h => IsWindowVisible(h) && !IsIconic(h));
-        if (shown) Log.Info($"Surfaced {revealed.Count} window(s) of pid {pid}");
-        else
+        if (shown)
         {
-            // 不要一律甩锅给 UIPI：先看是不是真的权限更高（打不开进程句柄），否则就是窗口自己不肯显示。
-            string reason = "the window refused to show (ShowWindow had no effect)";
-            try
-            {
-                using var probe = System.Diagnostics.Process.GetProcessById((int)pid);
-                _ = probe.Handle;   // 能拿到句柄 = 不是 UIPI 拦截
-            }
-            catch (Exception)
-            {
-                reason = "the process runs at a higher integrity level (UIPI blocks us)";
-            }
-            Log.Info($"Cannot surface pid {pid}: {reason}");
+            Log.Info($"Surfaced {revealed.Count} window(s) of pid {pid}");
+            return true;
         }
-        return true;
+
+        // 不要一律甩锅给 UIPI：先看是不是真的权限更高（打不开进程句柄），否则就是窗口自己不肯显示。
+        string reason = "the window refused to show (ShowWindow had no effect)";
+        try
+        {
+            using var probe = System.Diagnostics.Process.GetProcessById((int)pid);
+            _ = probe.Handle;   // 能拿到句柄 = 不是 UIPI 拦截
+        }
+        catch (Exception)
+        {
+            reason = "the process runs at a higher integrity level (UIPI blocks us)";
+        }
+        Log.Info($"Cannot surface pid {pid}: {reason}");
+        return false;   // 没显示出任何窗口：让调用方继续按原句柄走完整激活
     }
 
 
