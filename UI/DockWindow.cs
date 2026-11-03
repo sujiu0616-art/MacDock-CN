@@ -950,16 +950,16 @@ internal sealed class DockWindow : Window
             _strip.Visibility = Visibility.Collapsed;
             return;
         }
-        const double bleed = 24;   // DIU：向外扩一圈，让底板不至于紧贴玻璃板边缘
-        double left = _layout.PlateStart - bleed;
-        double width = (_layout.PlateEnd - _layout.PlateStart) + bleed * 2;
-        double top = Math.Max(0, _m.EdgeGap - bleed * 0.5);
-        double height = _m.PlateThickness + bleed;
+        // 上沿对齐玻璃板顶（再往上就压到应用上了），下沿一直铺到屏幕底边 ——
+        // 玻璃板下面那段 EdgeGap 也是"Dock 所在的区域"，不能留白。
+        double width = (double)(_windowPx.Right - _windowPx.Left) / _scale;
+        double windowHeight = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
+        double top = _m.EdgeGap;
         _strip.Width = width;
-        _strip.Height = height;
-        Canvas.SetLeft(_strip, left);
+        _strip.Height = windowHeight - top;
+        Canvas.SetLeft(_strip, 0);
         Canvas.SetTop(_strip, top);
-        _strip.CornerRadius = new CornerRadius(_m.PlateRadius + bleed * 0.5);
+        _strip.CornerRadius = new CornerRadius(0);
         _strip.Background = Theme.IsDark ? StripDark : StripLight;
         _strip.Visibility = Visibility.Visible;
     }
