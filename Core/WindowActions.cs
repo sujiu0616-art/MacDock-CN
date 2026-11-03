@@ -352,19 +352,11 @@ internal static class WindowActions
         bool targetWasVisible = IsWindowVisible(target);
         if (!targetWasVisible && !IsIconic(target))
         {
-            // 托盘态只有一条真正有效的恢复路径：再启动一次它自己，让应用的单实例机制去恢复
+            // 托盘态唯一真正有效的恢复路径：再启动一次它自己，让应用的单实例机制去恢复
             // （Win32 的 ShowWindow 只让窗口"看得见"，内部状态还停在托盘里，点上去没反应）。
-            // 但"再启动一次"本身就是一次多开尝试，所以交给"允许多实例运行"开关决定：
-            //   勾上  -> 走这条路，托盘类程序能真正恢复；
-            //   不勾  -> 只 ShowWindow 唤回，绝不起新实例（可能唤回后不接管输入）。
-            if (DockConfig.AllowMultipleInstances)
-            {
-                Log.Info($"pid {pid}: hidden to tray, multiple instances allowed - asking the app to restore itself");
-                RelaunchToRestore(pid);
-                return true;
-            }
-            Log.Info($"pid {pid}: hidden to tray, multiple instances off - showing the window only");
-        }
+            Log.Info($"pid {pid}: main window is hidden to tray, asking the app to restore itself");
+            RelaunchToRestore(pid);
+            return true;        }
         // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
         // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
         // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走。

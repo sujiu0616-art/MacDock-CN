@@ -108,7 +108,6 @@ internal static class Loc
         ["Show the Windows Taskbar"] = "Mostra la barra di Windows",
         ["Menu Bar"] = "Barra dei menu in alto",
         ["Start with Windows"] = "Avvia con Windows",
-        ["Allow multiple instances"] = "Consenti piu istanze",
         ["Quit {0}"] = "Esci da {0}",
         // Menu bar
         ["Wi-Fi: signal {0}%"] = "Wi-Fi: segnale {0}%",
@@ -185,7 +184,6 @@ internal static class Loc
         ["Show the Windows Taskbar"] = "显示 Windows 任务栏",
         ["Menu Bar"] = "菜单栏",
         ["Start with Windows"] = "开机时启动",
-        ["Allow multiple instances"] = "允许多实例运行",
         ["Quit {0}"] = "退出 {0}",
         // 菜单栏
         ["Wi-Fi: signal {0}%"] = "Wi-Fi：信号 {0}%",
