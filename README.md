@@ -1,6 +1,7 @@
 # MacDock · macOS 风格任务栏（Windows 11）
 
-![MacDock](docs/images/macdock-desktop.png)
+![MacDock 桌面](docs/images/macdock-desktop.png)
+![Dock 与普通窗口共存](docs/images/macdock-browser.png)
 
 > **独立项目，不是任何项目的官方版本。**
 > 起点代码来自 [**lupanostefano/Gravitone**](https://github.com/lupanostefano/Gravitone)（MIT License，© 2026 Stefano Lupano），此后按自己的方向开发与维护。
