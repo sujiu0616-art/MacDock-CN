@@ -76,12 +76,10 @@ internal static class WindowActions
         // 那会让窗口重新走一次"非活动 -> 活动"，标题栏按钮跟着重绘（用户看到"叉号闪一下"）。
         if (ForegroundReady(hwnd)) return true;
 
-        // 窗口本来就在屏幕上（只是不在前台）：只把前台交给它，不动 z-order、不 BringWindowToTop。
-        // 层级和位置都不变，标题栏的重绘被压到最少。
-        if (IsWindowVisible(hwnd) && !IsIconic(hwnd))
-        {
-            if (SetForegroundWindow(hwnd) && ForegroundReady(hwnd)) return true;
-        }
+        // 注意：这里**不能**图省事只做 SetForegroundWindow。最小化的窗口被 ShowWindow(SW_RESTORE)
+        // 叫回来之后，如果不再 BringWindowToTop / SetWindowPos，它可能仍然压在别的窗口下面：
+        // 此时 GetForegroundWindow / active / focus 全都指向它，点击却落在上面那个窗口上
+        // —— 就是"假激活"。所以只要不是已就绪，就走完整序列把层级也一起提上来。
 
         // 先无条件走一遍完整序列，最后才判定成败。
         // 为什么不再"SetForegroundWindow 成功就收工"：实测 Electron / Qt 应用会出现
