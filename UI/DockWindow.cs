@@ -2348,7 +2348,6 @@ internal sealed class DockWindow : Window
         {
             ShowWindow(_hwnd, SW_HIDE);
             _backdrop.SetVisible(false);
-            ReleaseStrip();
             Log.Info("Fullscreen invariant: dock was visible, hid it");
         }
         else if (!hide && !dockVisible && !_suppressedByNativeTaskbar)
@@ -2357,7 +2356,6 @@ internal sealed class DockWindow : Window
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             if (_backdrop is not null) _backdrop.SetVisible(true);
             UpdateFrame();
-            SchedulePlace();   // 重新占回底部这条
             Log.Info("Fullscreen invariant: dock was hidden, showed it");
         }
     }
@@ -2619,13 +2617,6 @@ internal sealed class DockWindow : Window
         catch (Exception) { return false; }
     }
 
-    /// <summary>
-    /// 全屏时把 Dock 那条预留还给应用。Dock 已经藏了，还占着这条边只会让"按工作区排版"的全屏应用
-    /// 在画面里留黑边 / 让全屏退化成最大化（实测动漫共和国这个 Flutter 播放器：直接全屏只做到最大化，
-    /// 先窗口化再全屏才正常）。退出全屏时 Place() 会把这条边重新占回来。
-    /// </summary>
-    void ReleaseStrip() => _appBar?.SetPosition(Edge, CurrentDisplay().Bounds, 0, ownEdge: true);
-
     void SetFullscreen(bool fullscreen, bool immediate = false)
     {
         if (fullscreen && _fullscreen != fullscreen && !immediate)
@@ -2674,14 +2665,12 @@ internal sealed class DockWindow : Window
         {
             ShowWindow(_hwnd, SW_HIDE);
             _backdrop.SetVisible(false);
-            ReleaseStrip();
         }
         else
         {
             ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             UpdateFrame();
-            SchedulePlace();   // 把这 90px 重新占回来
         }
     }
 
@@ -2717,9 +2706,6 @@ internal sealed class DockWindow : Window
             if (owner != pid) return true;
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
             if (!GetWindowRect(hwnd, out var rect)) return true;
-            // 只用和主判据同一套几何标准。早先这里还有 IsNearlyFullScreen（≥95% 面积），
-            // 那会把"最大化窗口"也当成满屏：退出全屏时 find 到的还是它自己，于是每 120ms
-            // 打一条 "owner replaced" 并重新认领 owner，全屏状态永远退不干净（实测 dmghg）。
             if (IsFullscreenRect(rect, bounds, work))
             {
                 found = hwnd;
@@ -2763,11 +2749,10 @@ internal sealed class DockWindow : Window
 
     static bool IsFullscreenRect(RECT rect, RECT bounds, RECT work)
     {
-        // 判据只能看**整块屏幕**：窗口要压到屏幕的四条边。
-        // 早先是"压过菜单栏条与 Dock 条各一半"——菜单栏删掉、Windows 任务栏挪到顶部之后，
-        // 那套坐标失效了：最大化的窗口矩形是 (-11,-59)-(2571,1563)，四条边都越界，
-        // 于是被当成真全屏（实测 dmghg：只是最大化，Dock 却被收了起来）。
-        // 现在要求四条边都到达屏幕边界 8px 容差以内 —— 最大化窗口的下边永远差一截，不会误判。
+        // 只看整块屏幕：四条边都要到达屏幕边界（8px 容差）。
+        // 旧判据是"压过菜单栏条与 Dock 条各一半"，菜单栏删除、任务栏挪到顶部后那套坐标失效，
+        // 最大化的窗口（矩形 (-11,-59) 2582x1622，四条边都甩到屏幕外）会被当成真全屏，
+        // 于是 Dock 被收起来（实测 dmghg）。最大化窗口的下边永远差一截，过不了这个判据。
         const int tolerance = 8;
         return rect.Left <= bounds.Left + tolerance
                && rect.Top <= bounds.Top + tolerance
@@ -2824,9 +2809,7 @@ internal sealed class DockWindow : Window
             {
                 // 游戏/UE 引擎会重建窗口：旧 hwnd 没了，但同进程还有另一个铺满的窗口 → 换过去
                 var replacement = FindFullscreenWindowOfPid(_fullscreenPid);
-                // 必须真的是"另一个"窗口：同一个 hwnd 说明它只是不再满屏（用户退出了全屏），
-                // 这时再认领一次就等于把全屏状态永久粘住。
-                if (replacement != IntPtr.Zero && replacement != _fullscreenOwner)
+                if (replacement != IntPtr.Zero)
                 {
                     Log.Info($"Fullscreen: owner replaced by another window of pid {_fullscreenPid} (hwnd {replacement})");
                     _fullscreenOwner = replacement;
@@ -2919,19 +2902,12 @@ internal sealed class DockWindow : Window
         // · 浏览器 F11 / GTK 全屏后 showCmd 可能仍报 SW_SHOWMAXIMIZED，但窗口压住了两条 appbar → 算全屏。
         if (IsMaximized(foreground) && !IsFullscreenRect(rect, bounds, display.Work)) return false;
 
-        // 结构性判据：压进"菜单栏那条"与"Dock 那条"各一半以上才算全屏
-        // 判据一：结构性（压进菜单栏条与 Dock 条各一半以上）
+        // 判据一：四条边都贴住屏幕（IsFullscreenRect，8px 容差）
         bool fullscreen = IsFullscreenRect(rect, bounds, display.Work);
 
-        // 判据二：覆盖 ≥95% 屏幕面积也算全屏。
-        // 现在顶部预留只有 48px，最大化窗口 ≈ 91%，所以这条不会把最大化误判成全屏；
-        // 但能兜住那些"全屏窗口比屏幕小几像素/被 DWM 修过边框"的情况。
-        if (!fullscreen)
-        {
-            double area = (double)rect.Width * rect.Height;
-            double screen = (double)bounds.Width * bounds.Height;
-            if (screen > 0 && area >= screen * 0.95) fullscreen = true;
-        }
+        // 判据二原本是"覆盖 ≥95% 屏幕面积也算全屏"，现在必须去掉：
+        // 最大化的窗口是 (-11,-59) 2582x1622，面积是屏幕的 102%，会直接命中这一条
+        // （实测 dmghg：只最大化，Dock 却被收了起来）。贴边判据已经包含"比屏幕大几像素"的情况。
         if (fullscreen)
         {
             _fullscreenOwner = GetAncestor(foreground, 2 /* GA_ROOT */);
