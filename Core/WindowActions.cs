@@ -76,6 +76,13 @@ internal static class WindowActions
         // 那会让窗口重新走一次"非活动 -> 活动"，标题栏按钮跟着重绘（用户看到"叉号闪一下"）。
         if (ForegroundReady(hwnd)) return true;
 
+        // 窗口本来就在屏幕上（只是不在前台）：只把前台交给它，不动 z-order、不 BringWindowToTop。
+        // 层级和位置都不变，标题栏的重绘被压到最少。
+        if (IsWindowVisible(hwnd) && !IsIconic(hwnd))
+        {
+            if (SetForegroundWindow(hwnd) && ForegroundReady(hwnd)) return true;
+        }
+
         // 先无条件走一遍完整序列，最后才判定成败。
         // 为什么不再"SetForegroundWindow 成功就收工"：实测 Electron / Qt 应用会出现
         // "GetForegroundWindow() 已经是目标窗口，但目标线程的 active/focus 还是空的"，
