@@ -43,18 +43,25 @@ internal static class WindowActions
         if (GetForegroundWindow() == hwnd) return;
         System.Threading.Tasks.Task.Run(() =>
         {
-            System.Threading.Thread.Sleep(90);
-            try
+            // 连追三轮：Electron / Qt 应用拿到焦点后常常又把自己的另一个窗口或主窗口抢回去，
+            // 一轮不够（实测 DeepSeek Harness 在前台时抢微信，第一轮之后前台又跑回去）。
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                if (GetForegroundWindow() == hwnd) return;
-                bool ok = ForceForeground(hwnd);
-                Log.Info(ok
-                    ? $"Activate: foreground re-taken for hwnd {hwnd}"
-                    : $"Activate: hwnd {hwnd} still not in front after retry (fg={GetForegroundWindow()})");
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Re-taking the foreground");
+                System.Threading.Thread.Sleep(120);
+                try
+                {
+                    if (GetForegroundWindow() == hwnd) return;
+                    bool ok = ForceForeground(hwnd);
+                    Log.Info(ok
+                        ? $"Activate: foreground re-taken for hwnd {hwnd} (attempt {attempt})"
+                        : $"Activate: hwnd {hwnd} still not in front after attempt {attempt} (fg={GetForegroundWindow()})");
+                    if (ok && GetForegroundWindow() == hwnd) return;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Re-taking the foreground");
+                    return;
+                }
             }
         });
     }
@@ -65,8 +72,11 @@ internal static class WindowActions
     /// </summary>
     static bool ForceForeground(IntPtr hwnd)
     {
-        if (SetForegroundWindow(hwnd)) return true;
-
+        // 先无条件走一遍完整序列，最后才判定成败。
+        // 为什么不再"SetForegroundWindow 成功就收工"：实测微信/DeepSeek 会出现
+        // "GetForegroundWindow() 已经是目标窗口，但目标线程的 active/focus 还是空的"，
+        // 也就是窗口占着前台的名分、却不接收输入（用户：窗口出来了，点不动）。
+        // 跨进程 SetFocus 必须在 AttachThreadInput 之后才有效，所以 attach 这一步不能跳。
         var foreground = GetForegroundWindow();
         uint current = GetCurrentThreadId();
         uint targetThread = GetWindowThreadProcessId(hwnd, out _);
@@ -75,6 +85,8 @@ internal static class WindowActions
         bool attachedFg = false, attachedTarget = false;
         try
         {
+            if (SetForegroundWindow(hwnd) && ForegroundReady(hwnd)) return true;
+
             if (foregroundThread != 0 && foregroundThread != current)
                 attachedFg = AttachThreadInput(current, foregroundThread, true);
             if (targetThread != 0 && targetThread != current && targetThread != foregroundThread)
@@ -82,12 +94,11 @@ internal static class WindowActions
 
             BringWindowToTop(hwnd);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            // SetFocus 是这里的关键：只 SetForegroundWindow 不把键盘焦点交过去，窗口看着在前台，
-            // 实际输入还挂在上一个线程上（用户感受就是"窗口点不动"）。
             SetFocus(hwnd);
-            if (SetForegroundWindow(hwnd))
+            SetActiveWindow(hwnd);
+            if (SetForegroundWindow(hwnd) && ForegroundReady(hwnd))
             {
-                Log.Info($"Activate ok (attach) fg={GetForegroundWindow()}");
+                Log.Info($"Activate ok (attach) hwnd={hwnd}");
                 return true;
             }
         }
@@ -102,7 +113,7 @@ internal static class WindowActions
         // （explorer / XamlExplorerHostIslandWindow，标题"任务切换"）唤起来并卡在最前面，
         // 表现就是"窗口能拖、但内容区点击全都没反应"。已实测踩过这个坑。
         SwitchToThisWindow(hwnd, true);
-        if (GetForegroundWindow() == hwnd) return true;
+        if (ForegroundReady(hwnd)) return true;
 
         // 真的最后一招：借 Explorer 的激活通道（和点任务栏按钮是同一条路）。
         // 这条路不受前台锁约束 —— 我们自己的 SetForegroundWindow 在"点击被判给 explorer"之后
@@ -110,12 +121,47 @@ internal static class WindowActions
         if (ActivateViaTaskbar(hwnd))
         {
             System.Threading.Thread.Sleep(40);
-            if (GetForegroundWindow() == hwnd) return true;
+            if (ForegroundReady(hwnd)) return true;
         }
 
         Log.Info($"Activate: could not bring hwnd {hwnd} to the front (error {Marshal.GetLastWin32Error()})");
         return false;
     }
+
+    /// <summary>
+    /// "真的可以操作了"的判据：它必须是前台窗口，**并且**它所在线程的 active/focus 已经指到它。
+    /// 只看 GetForegroundWindow 不够 —— 会出现前台名分在、输入没接管的状态。
+    /// </summary>
+    static bool ForegroundReady(IntPtr hwnd)
+    {
+        if (GetForegroundWindow() != hwnd) return false;
+        uint thread = GetWindowThreadProcessId(hwnd, out _);
+        if (thread == 0) return true;
+        var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(thread, ref info)) return true;   // 查不到就按可用处理，别卡死
+        if (info.hwndActive != IntPtr.Zero && info.hwndActive != hwnd && info.hwndFocus == IntPtr.Zero)
+            return false;                                        // 线程的 active 指着别的窗口且没焦点
+        return info.hwndActive == hwnd || info.hwndFocus != IntPtr.Zero;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct GUITHREADINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public int caretLeft, caretTop, caretRight, caretBottom;   // RECT rcCaret（用 4 个 int 保持布局一致）
+    }
+
+    [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO info);
+    [DllImport("user32.dll")] static extern IntPtr SetActiveWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool EnableWindow(IntPtr hwnd, bool enable);
 
     // ── Explorer 的激活通道 ──────────────────────────────────────────────
     // ITaskbarList3::ActivateTab 与"点击任务栏按钮"等价。只声明到 ActivateTab 为止（vtable 前缀必须一致）。
@@ -267,6 +313,13 @@ internal static class WindowActions
         if (!IsWindowVisible(target))
             SetWindowPos(target, IntPtr.Zero, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | 0x0040 /* SWP_SHOWWINDOW */);
+        // 被 disable 的窗口是"看得见、点不动"的另一种来源：应用缩到托盘时把自己的窗口禁用了，
+        // 外部 ShowWindow 不会解开它。
+        if (!IsWindowEnabled(target))
+        {
+            EnableWindow(target, true);
+            Log.Info($"Surfaced hwnd {target}: it was disabled, re-enabled it");
+        }
 
         if (IsWindowVisible(target) && !IsIconic(target))
         {
