@@ -8,6 +8,7 @@ internal static class WindowActions
 {
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
     [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr hwnd);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     static readonly IntPtr HWND_TOP = IntPtr.Zero;
@@ -27,6 +28,33 @@ internal static class WindowActions
             if (IsIconic(hwnd)) PostMessage(hwnd, WM_SYSCOMMAND, (IntPtr)0xF120 /* SC_RESTORE */, IntPtr.Zero);
         }
         ForceForeground(hwnd);
+        ConfirmForeground(hwnd);
+    }
+
+    /// <summary>
+    /// 激活之后**确认**前台真的换了。SetForegroundWindow 返回 true 却没真正交接的情况很常见
+    /// （前台锁 + 应用自己又把焦点抢回去），表现就是"窗口弹出来了但点不动，再点一次任务栏才行"。
+    /// 这里在 90ms 后复查一次，不对就再抢一遍。
+    /// </summary>
+    static void ConfirmForeground(IntPtr hwnd)
+    {
+        if (GetForegroundWindow() == hwnd) return;
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            System.Threading.Thread.Sleep(90);
+            try
+            {
+                if (GetForegroundWindow() == hwnd) return;
+                bool ok = ForceForeground(hwnd);
+                Log.Info(ok
+                    ? $"Activate: foreground re-taken for hwnd {hwnd}"
+                    : $"Activate: hwnd {hwnd} still not in front after retry (fg={GetForegroundWindow()})");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Re-taking the foreground");
+            }
+        });
     }
 
     /// <summary>
@@ -52,6 +80,9 @@ internal static class WindowActions
 
             BringWindowToTop(hwnd);
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            // SetFocus 是这里的关键：只 SetForegroundWindow 不把键盘焦点交过去，窗口看着在前台，
+            // 实际输入还挂在上一个线程上（用户感受就是"窗口点不动"）。
+            SetFocus(hwnd);
             if (SetForegroundWindow(hwnd))
             {
                 Log.Info($"Activate ok (attach) fg={GetForegroundWindow()}");
@@ -71,8 +102,50 @@ internal static class WindowActions
         SwitchToThisWindow(hwnd, true);
         if (GetForegroundWindow() == hwnd) return true;
 
+        // 真的最后一招：借 Explorer 的激活通道（和点任务栏按钮是同一条路）。
+        // 这条路不受前台锁约束 —— 我们自己的 SetForegroundWindow 在"点击被判给 explorer"之后
+        // 会时灵时不灵，而那正是"窗口弹出来却点不动、再点一次任务栏才好"的来源。
+        if (ActivateViaTaskbar(hwnd))
+        {
+            System.Threading.Thread.Sleep(40);
+            if (GetForegroundWindow() == hwnd) return true;
+        }
+
         Log.Info($"Activate: could not bring hwnd {hwnd} to the front (error {Marshal.GetLastWin32Error()})");
         return false;
+    }
+
+    // ── Explorer 的激活通道 ──────────────────────────────────────────────
+    // ITaskbarList3::ActivateTab 与"点击任务栏按钮"等价。只声明到 ActivateTab 为止（vtable 前缀必须一致）。
+    [ComImport, Guid("ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITaskbarList3
+    {
+        void HrInit();
+        void AddTab(IntPtr hwnd);
+        void DeleteTab(IntPtr hwnd);
+        void ActivateTab(IntPtr hwnd);
+        void SetActiveAlt(IntPtr hwnd);
+    }
+
+    [ComImport, Guid("56FDF344-FD6D-11d0-958A-006097C9A090")]
+    class TaskbarList { }
+
+    static ITaskbarList3? _taskbarList;
+
+    static bool ActivateViaTaskbar(IntPtr hwnd)
+    {
+        try
+        {
+            _taskbarList ??= (ITaskbarList3)new TaskbarList();
+            _taskbarList.HrInit();
+            _taskbarList.ActivateTab(hwnd);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Info("ActivateTab failed: " + ex.Message);
+            return false;
+        }
     }
 
     /// <summary>Minimizes through the window's own system command, so the app sees it and animates.</summary>
@@ -125,7 +198,9 @@ internal static class WindowActions
             ShowWindowAsync(hwnd, SW_RESTORE);
             ShowWindowAsync(hwnd, 5);   // SW_SHOW
         }
-        if (!SetForegroundWindow(revealed[0])) SwitchToThisWindow(revealed[0], true);
+        // 走和主路径同一套降级链：早先这里只有 SetForegroundWindow + SwitchToThisWindow，
+        // 少一档 AttachThreadInput/SetFocus，于是"从 Dock 唤起最小化的窗口"经常只是显示、不接管输入。
+        if (ForceForeground(revealed[0])) ConfirmForeground(revealed[0]);
 
         // 提权进程（UIPI）会无视我们的 ShowWindow：确认一下有没有真的显示出来，把结论写进日志。
         bool shown = revealed.Exists(h => IsWindowVisible(h) && !IsIconic(h));
