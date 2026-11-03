@@ -950,13 +950,16 @@ internal sealed class DockWindow : Window
             _strip.Visibility = Visibility.Collapsed;
             return;
         }
-        // 只铺在**玻璃板下方**那一段（EdgeGap 是玻璃板到屏幕底边的空隙）。
-        // 不要从玻璃板顶开始：那个高度已经够到应用内容了，看起来就是"一块板盖在应用上"。
-        double width = (double)(_windowPx.Right - _windowPx.Left) / _scale;
+        // 尺寸必须和 Place() 里向系统申请的 AppBar 预留完全一致：
+        //   reserve = (EdgeGap + PlateThickness + DockGap) * scale
+        // 那一块才是"窗口让开给 Dock 的整个区域"（实测 90 px：1510~1600）。
+        // 注意 EdgeGap 是**从屏幕底边往上**量的距离，不能当 y 坐标直接用 —— 之前那样算只剩 6 px。
+        const double DockGap = 6;
         double windowHeight = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
-        double top = _m.EdgeGap + _m.PlateThickness;
-        _strip.Width = width;
-        _strip.Height = Math.Max(0, windowHeight - top);
+        double reserve = _m.EdgeGap + _m.PlateThickness + DockGap;
+        double top = Math.Max(0, windowHeight - reserve);
+        _strip.Width = (double)(_windowPx.Right - _windowPx.Left) / _scale;
+        _strip.Height = windowHeight - top;
         Canvas.SetLeft(_strip, 0);
         Canvas.SetTop(_strip, top);
         _strip.CornerRadius = new CornerRadius(0);
