@@ -1663,6 +1663,14 @@ internal sealed class DockWindow : Window
                     _config.Save();
                 }, isChecked: atStart);
             }
+            // 放在每个应用的"选项"里：这是按应用体感最强的开关（关闭到托盘的程序被唤回时会不会多开一个窗口）。
+            bool allowMulti = _config.Settings.AllowMultipleInstances;
+            options.Add(Loc.T("Allow multiple instances"), () =>
+            {
+                _config.Settings.AllowMultipleInstances = !allowMulti;
+                _config.Save();
+                DockConfig.AllowMultipleInstances = !allowMulti;
+            }, isChecked: allowMulti);
             var revealPath = RevealPathOf(item);
             options.Add(Loc.T("Show in File Explorer"), () => Reveal(revealPath!), enabled: revealPath is not null);
             menu.AddSeparator();
@@ -1934,7 +1942,6 @@ internal sealed class DockWindow : Window
             _config.Save();
             DockConfig.AllowMultipleInstances = !allowMulti;
         }, isChecked: allowMulti);
-        menu.AddSeparator();
         menu.AddSeparator();
         menu.Add("添加网页应用…", () => PromptAddWebApp());
         menu.Add(Loc.T("Quit {0}", AppInfo.Name), () => Application.Current.Shutdown());
