@@ -68,6 +68,12 @@ internal sealed class DockSettings
     /// </summary>
     public bool FollowPointer { get; set; } = true;
 
+    /// <summary>
+    /// 允许为"关闭到托盘"的程序再起一个实例来恢复窗口。关掉（默认）时只用 ShowWindow 唤回，
+    /// 绝不新起实例 —— 有些程序不认单实例转发，重启它只会多开一个窗口。
+    /// </summary>
+    public bool AllowMultipleInstances { get; set; }
+
     public void Clamp()
     {
         IconSize = Math.Clamp(IconSize, 16, 128);
@@ -103,6 +109,9 @@ internal sealed class DockConfig
 
     /// <summary>当前生效的安全模式（由 Dock 启动时写入，WindowActions 等无实例的地方读它）。</summary>
     public static bool SafeMode { get; set; }
+
+    /// <summary>当前生效的"允许多实例"（由 Dock 启动/改设置时写入，WindowActions 等无实例的地方读它）。</summary>
+    public static bool AllowMultipleInstances { get; set; }
 
     public static string Folder { get; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MacDock");

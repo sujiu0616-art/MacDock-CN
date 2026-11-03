@@ -468,6 +468,7 @@ internal sealed class DockWindow : Window
         StartTrashWatch();
 
         DockConfig.SafeMode = _config.Settings.SafeMode;
+        DockConfig.AllowMultipleInstances = _config.Settings.AllowMultipleInstances;
         // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
         KeyLauncher.OnWinDown = OnWinKeyDown;
@@ -1926,6 +1927,13 @@ internal sealed class DockWindow : Window
             _config.Save();
             AutoStart.Set(!autoStart);
         }, isChecked: autoStart);
+        bool allowMulti = _config.Settings.AllowMultipleInstances;
+        menu.Add(Loc.T("Allow multiple instances"), () =>
+        {
+            _config.Settings.AllowMultipleInstances = !allowMulti;
+            _config.Save();
+            DockConfig.AllowMultipleInstances = !allowMulti;
+        }, isChecked: allowMulti);
         menu.AddSeparator();
         menu.AddSeparator();
         menu.Add("添加网页应用…", () => PromptAddWebApp());
@@ -2125,6 +2133,7 @@ internal sealed class DockWindow : Window
         Log.Info($"Resumed ({reason})");
         _tracker?.SetPaused(false);
         DockConfig.SafeMode = _config.Settings.SafeMode;
+        DockConfig.AllowMultipleInstances = _config.Settings.AllowMultipleInstances;
         // 只管启动台热键（F4）：全屏应用在前台时不响应；Esc 由钩子兜底关启动台
         // 按 Win：第一时间把菜单栏 + Dock 放出来（原生开始菜单由系统自己弹，我们不碰键）
         KeyLauncher.OnWinDown = OnWinKeyDown;
