@@ -352,16 +352,12 @@ internal static class WindowActions
         bool targetWasVisible = IsWindowVisible(target);
         if (!targetWasVisible && !IsIconic(target))
         {
-            // 托盘态：应用自己恢复最可靠（单实例转发），但那要"再启动一次它自己"——
-            // 不认单实例转发的程序（如某些 Qt 客户端）会因此多开一个窗口。
-            // 所以这条路交给用户开关控制：默认关，只 ShowWindow 唤回，绝不新起实例。
-            if (DockConfig.AllowMultipleInstances)
-            {
-                Log.Info($"pid {pid}: main window is hidden to tray, asking the app to restore itself");
-                RelaunchToRestore(pid);
-                return true;
-            }
-            Log.Info($"pid {pid}: hidden to tray, multiple instances disabled - showing the window only");
+            // 托盘态：唯一真正有效的恢复路径是让应用自己来（单实例转发），
+            // Win32 的 ShowWindow 只让窗口"看得见"，应用内部状态还停在托盘里、点上去没反应。
+            // 这与"允许多实例运行"开关无关：那个开关管的是"用户点图标时要不要再开一个程序"。
+            Log.Info($"pid {pid}: main window is hidden to tray, asking the app to restore itself");
+            RelaunchToRestore(pid);
+            return true;
         }
         // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
         // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
