@@ -2348,6 +2348,7 @@ internal sealed class DockWindow : Window
         {
             ShowWindow(_hwnd, SW_HIDE);
             _backdrop.SetVisible(false);
+            ReleaseStrip();
             Log.Info("Fullscreen invariant: dock was visible, hid it");
         }
         else if (!hide && !dockVisible && !_suppressedByNativeTaskbar)
@@ -2356,6 +2357,7 @@ internal sealed class DockWindow : Window
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             if (_backdrop is not null) _backdrop.SetVisible(true);
             UpdateFrame();
+            SchedulePlace();   // 重新占回底部这条
             Log.Info("Fullscreen invariant: dock was hidden, showed it");
         }
     }
@@ -2617,6 +2619,13 @@ internal sealed class DockWindow : Window
         catch (Exception) { return false; }
     }
 
+    /// <summary>
+    /// 全屏时把 Dock 那条预留还给应用。Dock 已经藏了，还占着这条边只会让"按工作区排版"的全屏应用
+    /// 在画面里留黑边 / 让全屏退化成最大化（实测动漫共和国这个 Flutter 播放器：直接全屏只做到最大化，
+    /// 先窗口化再全屏才正常）。退出全屏时 Place() 会把这条边重新占回来。
+    /// </summary>
+    void ReleaseStrip() => _appBar?.SetPosition(Edge, CurrentDisplay().Bounds, 0, ownEdge: true);
+
     void SetFullscreen(bool fullscreen, bool immediate = false)
     {
         if (fullscreen && _fullscreen != fullscreen && !immediate)
@@ -2665,12 +2674,14 @@ internal sealed class DockWindow : Window
         {
             ShowWindow(_hwnd, SW_HIDE);
             _backdrop.SetVisible(false);
+            ReleaseStrip();
         }
         else
         {
             ShowWindow(_hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             UpdateFrame();
+            SchedulePlace();   // 把这 90px 重新占回来
         }
     }
 
@@ -2706,7 +2717,10 @@ internal sealed class DockWindow : Window
             if (owner != pid) return true;
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
             if (!GetWindowRect(hwnd, out var rect)) return true;
-            if (IsFullscreenRect(rect, bounds, work) || IsNearlyFullScreen(rect, bounds))
+            // 只用和主判据同一套几何标准。早先这里还有 IsNearlyFullScreen（≥95% 面积），
+            // 那会把"最大化窗口"也当成满屏：退出全屏时 find 到的还是它自己，于是每 120ms
+            // 打一条 "owner replaced" 并重新认领 owner，全屏状态永远退不干净（实测 dmghg）。
+            if (IsFullscreenRect(rect, bounds, work))
             {
                 found = hwnd;
                 return false;
@@ -2749,13 +2763,16 @@ internal sealed class DockWindow : Window
 
     static bool IsFullscreenRect(RECT rect, RECT bounds, RECT work)
     {
-        int topStrip = Math.Max(1, work.Top - bounds.Top);        // 菜单栏那条（39px @150%）
-        int bottomStrip = Math.Max(1, bounds.Bottom - work.Bottom); // Dock 那条（119px）
-        const int sideTolerance = 8;
-        return rect.Top <= bounds.Top + topStrip / 2
-               && rect.Bottom >= bounds.Bottom - bottomStrip / 2
-               && rect.Left <= bounds.Left + sideTolerance
-               && rect.Right >= bounds.Right - sideTolerance;
+        // 判据只能看**整块屏幕**：窗口要压到屏幕的四条边。
+        // 早先是"压过菜单栏条与 Dock 条各一半"——菜单栏删掉、Windows 任务栏挪到顶部之后，
+        // 那套坐标失效了：最大化的窗口矩形是 (-11,-59)-(2571,1563)，四条边都越界，
+        // 于是被当成真全屏（实测 dmghg：只是最大化，Dock 却被收了起来）。
+        // 现在要求四条边都到达屏幕边界 8px 容差以内 —— 最大化窗口的下边永远差一截，不会误判。
+        const int tolerance = 8;
+        return rect.Left <= bounds.Left + tolerance
+               && rect.Top <= bounds.Top + tolerance
+               && rect.Right >= bounds.Right - tolerance
+               && rect.Bottom >= bounds.Bottom - tolerance;
     }
 
     /// <summary>窗口是否处于"最大化"状态（SW_SHOWMAXIMIZED = 3）。</summary>
@@ -2807,7 +2824,9 @@ internal sealed class DockWindow : Window
             {
                 // 游戏/UE 引擎会重建窗口：旧 hwnd 没了，但同进程还有另一个铺满的窗口 → 换过去
                 var replacement = FindFullscreenWindowOfPid(_fullscreenPid);
-                if (replacement != IntPtr.Zero)
+                // 必须真的是"另一个"窗口：同一个 hwnd 说明它只是不再满屏（用户退出了全屏），
+                // 这时再认领一次就等于把全屏状态永久粘住。
+                if (replacement != IntPtr.Zero && replacement != _fullscreenOwner)
                 {
                     Log.Info($"Fullscreen: owner replaced by another window of pid {_fullscreenPid} (hwnd {replacement})");
                     _fullscreenOwner = replacement;
