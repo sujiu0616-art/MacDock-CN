@@ -142,6 +142,7 @@ internal sealed class DockWindow : Window
 
     ForegroundWatcher? _foregroundWatcher;   // 前台/尺寸变化即时触发全屏检测
     readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(120) };   // 120ms：全屏入场要"跟手"，500ms 会明显慢半拍
+    readonly DispatcherTimer _noticeWatch = new() { Interval = TimeSpan.FromMilliseconds(400) };      // 微信卡片位置校正
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>
@@ -334,6 +335,14 @@ internal sealed class DockWindow : Window
         UiWatchdog.Start(Dispatcher);
         InteractionWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
+
+        // 微信的新消息卡片会自己摆到屏幕右上角外（实测压进菜单栏、右边超屏 35px）：
+        // 400ms 一次，只认那个窗口类，摆正一次就够；全屏/暂停时不动它。
+        _noticeWatch.Tick += (_, _) =>
+        {
+            if (!_fullscreen && _pauseReasons.Count == 0) WeChatNotice.Nudge();
+        };
+        _noticeWatch.Start();
 
         // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
         _foregroundWatcher = new ForegroundWatcher(() =>

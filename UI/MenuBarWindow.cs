@@ -23,7 +23,7 @@ namespace MacDock.UI;
 /// </summary>
 internal sealed class MenuBarWindow : Window
 {
-    const double BarHeight = 32; // DIP：盖满任务栏留出的顶部预留（48px @150%），最大化窗口时不再有空隙
+    internal const double BarHeight = 32; // DIP：盖满任务栏留出的顶部预留（48px @150%），最大化窗口时不再有空隙
 
     readonly MenuBars _owner;
     readonly DockConfig _config;
