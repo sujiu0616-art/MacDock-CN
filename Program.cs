@@ -19,7 +19,9 @@ internal static class Program
                 return Guard.RunGuard(args);
             case "--hide-taskbar":
                 // 开机第一步：只把 Windows 任务栏藏起来（不加载 WPF、不建 Dock），几百毫秒就完成。
-                TaskbarState.Hide();
+                // 但"替换任务栏"关掉之后就不该再藏：MacDock.vbs 是无条件跑这一步的，
+                // 早先没有这个判断，重启后原生任务栏会被藏掉且再没人恢复（2026-11-04 实测）。
+                if (DockConfig.LoadOrCreate().Settings.ReplaceTaskbar) TaskbarState.Hide();
                 return 0;
             case "--restore-taskbar":
                 // Emergency switch: shows the Windows taskbar whatever state it was left in.
@@ -72,6 +74,10 @@ internal sealed class App : Application
 
         Theme.Refresh();
         var config = DockConfig.LoadOrCreate();
+        // "替换任务栏"关着的时候，任何来源留下的隐藏都该在这一步撤销：
+        // 开机那一步（--hide-taskbar）在旧版本里是无条件藏的，marker 的 owner 又是一个已经退出的进程，
+        // 主进程按 pid 匹配恢复不到它 —— 表现就是"重启后 Windows 任务栏不见了"。
+        if (!config.Settings.ReplaceTaskbar) TaskbarState.Restore(force: true);
         Loc.Init(config.Settings.Language);
         if (config.Settings.StartWithWindows) AutoStart.Ensure();
 
