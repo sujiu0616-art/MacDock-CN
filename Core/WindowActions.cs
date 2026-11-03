@@ -259,6 +259,34 @@ internal static class WindowActions
     const uint GW_OWNER = 4;
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
 
+    /// <summary>
+    /// 再启动一次应用自己，让它按自己的逻辑从托盘恢复（单实例机制会把请求转给已运行实例）。
+    /// 这是"关闭到托盘"类应用的可靠恢复路径 —— 外部 ShowWindow 只会让它"看得见但不吃输入"。
+    /// </summary>
+    static void RelaunchToRestore(uint pid)
+    {
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                string? exe = null;
+                using (var process = System.Diagnostics.Process.GetProcessById((int)pid))
+                    exe = process.MainModule?.FileName;
+                if (string.IsNullOrEmpty(exe))
+                {
+                    Log.Info($"Re-launch skipped: cannot read the executable of pid {pid}");
+                    return;
+                }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+                Log.Info($"Re-launched {exe} so the app restores itself from the tray");
+            }
+            catch (Exception ex)
+            {
+                Log.Info("Re-launch failed: " + ex.Message);
+            }
+        });
+    }
+
     /// <summary>把 <paramref name="executable"/> 对应进程里"藏着"的顶层窗口显示出来并激活（缩到托盘/最小化时隐藏）。
     /// <summary>把某个可执行文件对应进程里 隐藏/最小化 的顶层窗口叫回来；true = 已经叫回来了，不要再起新实例。</summary>
     public static bool SurfaceHiddenWindows(string executable)
@@ -306,9 +334,19 @@ internal static class WindowActions
         // （实测日志：Surfaced 5 window(s) of pid 18612）。
         var target = PickMainWindow(pid, revealed);
 
-        // 注意：曾经试过"托盘态就再启动一次应用让它自己恢复"——实测无效：
-        // 微信/等程序并不会把请求转给已运行实例，而是新起一个实例（多出进程和一个小窗），
-        // 主窗口仍然藏着。这条路已经放弃，只保留 ShowWindow + 激活的全部降级链。
+        // "关闭到托盘"和"最小化"是两回事：
+        //   · 最小化：窗口还是 WS_VISIBLE、只是 IsIconic，外部 ShowWindow(SW_RESTORE) 能正确恢复；
+        //   · 关闭到托盘：应用自己 hide 了窗口，它的状态机仍认为"我在托盘里"，外部 ShowWindow
+        //     只让它"看得见"、应用不接管输入（Qt / Electron 都一样）。
+        // 托盘态靠应用自己恢复最可靠：再启动一次它自己，单实例机制会把请求转给已运行实例
+        // （实测 DeepSeek Harness 靠这条才彻底好用）。但**不在这里 return** ——
+        // 微信这类不认单实例转发的程序会去开新实例、主窗口更不出来，所以后面照旧显示+激活，两条路一起上。
+        bool targetWasVisible = IsWindowVisible(target);
+        if (!targetWasVisible && !IsIconic(target))
+        {
+            Log.Info($"pid {pid}: main window is hidden to tray, asking the app to restore itself");
+            RelaunchToRestore(pid);
+        }
         // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
         // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
         // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走。
