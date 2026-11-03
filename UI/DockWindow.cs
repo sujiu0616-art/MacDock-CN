@@ -141,7 +141,6 @@ internal sealed class DockWindow : Window
 
     ForegroundWatcher? _foregroundWatcher;   // 前台/尺寸变化即时触发全屏检测
     readonly DispatcherTimer _fullscreenCheck = new() { Interval = TimeSpan.FromMilliseconds(120) };   // 120ms：全屏入场要"跟手"，500ms 会明显慢半拍
-    readonly DispatcherTimer _noticeWatch = new() { Interval = TimeSpan.FromMilliseconds(1500) };     // 微信卡片的兜底扫描（主路径是 WinEvent 钩子）
     readonly DispatcherTimer _followTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
 
     /// <summary>Win+D / 显示桌面 / 别的程序把我们的窗口藏起来时，用它自己找回来。</summary>

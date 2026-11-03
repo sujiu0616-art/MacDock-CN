@@ -44,7 +44,7 @@ internal static class WindowActions
         System.Threading.Tasks.Task.Run(() =>
         {
             // 连追三轮：Electron / Qt 应用拿到焦点后常常又把自己的另一个窗口或主窗口抢回去，
-            // 一轮不够（实测 DeepSeek Harness 在前台时抢微信，第一轮之后前台又跑回去）。
+            // 一轮不够（实测 Electron 应用在前台时，第一轮之后前台又跑回去）。
             for (int attempt = 1; attempt <= 3; attempt++)
             {
                 System.Threading.Thread.Sleep(120);
@@ -73,7 +73,7 @@ internal static class WindowActions
     static bool ForceForeground(IntPtr hwnd)
     {
         // 先无条件走一遍完整序列，最后才判定成败。
-        // 为什么不再"SetForegroundWindow 成功就收工"：实测微信/DeepSeek 会出现
+        // 为什么不再"SetForegroundWindow 成功就收工"：实测 Electron / Qt 应用会出现
         // "GetForegroundWindow() 已经是目标窗口，但目标线程的 active/focus 还是空的"，
         // 也就是窗口占着前台的名分、却不接收输入（用户：窗口出来了，点不动）。
         // 跨进程 SetFocus 必须在 AttachThreadInput 之后才有效，所以 attach 这一步不能跳。
@@ -201,8 +201,7 @@ internal static class WindowActions
 
     /// <summary>
     /// 应用的消息窗口/托盘宿主/输入法窗口不是"主窗口"，但它们往往有标题、面积也不小：
-    /// 微信的 <c>WxTrayIconMessageWindow</c> 是 1920×1067，按面积挑必然挑到它，
-    /// 于是从 Dock 点微信会弹出一个空白窗口（实测）。
+    /// Qt 系应用的消息窗口（<c>*TrayIconMessageWindow</c>）往往是 1920×1067，\r?\n    /// 按面积挑必然挑到它，于是会弹出一个空白窗口（实测）。
     /// </summary>
     static string TitleOf(IntPtr hwnd)
     {
@@ -329,7 +328,7 @@ internal static class WindowActions
         if (revealed.Count == 0) return false;
 
         // 只唤起**一个主窗口**。早先这里把所有隐藏窗口全 ShowWindow 一遍：
-        // 微信"关闭到托盘"后有 5 个隐藏窗口（主窗 + 若干聊天窗），一次全弹出来之后
+        // 托盘类应用"关闭到托盘"后会有多个隐藏窗口（主窗 + 若干子窗），一次全弹出来之后
         // 前台却被设在 revealed[0]（很可能是聊天窗），用户看到的就是"窗口出来了却点不动"
         // （实测日志：Surfaced 5 window(s) of pid 18612）。
         var target = PickMainWindow(pid, revealed);
@@ -340,7 +339,7 @@ internal static class WindowActions
         //     只让它"看得见"、应用不接管输入（Qt / Electron 都一样）。
         // 托盘态靠应用自己恢复最可靠：再启动一次它自己，单实例机制会把请求转给已运行实例
         // （实测 DeepSeek Harness 靠这条才彻底好用）。但**不在这里 return** ——
-        // 微信这类不认单实例转发的程序会去开新实例、主窗口更不出来，所以后面照旧显示+激活，两条路一起上。
+        // 不认单实例转发的程序会去开新实例、主窗口更不出来，所以后面照旧显示+激活，两条路一起上。
         bool targetWasVisible = IsWindowVisible(target);
         if (!targetWasVisible && !IsIconic(target))
         {
