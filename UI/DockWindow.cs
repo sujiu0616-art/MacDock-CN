@@ -336,14 +336,18 @@ internal sealed class DockWindow : Window
         InteractionWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
 
-        // 微信的新消息卡片会自己摆到屏幕右上角外（实测压进菜单栏、右边超屏 35px）：
-        // 主路径是 EVENT_OBJECT_SHOW 钩子（同一帧摆正），这条定时器只是兜底扫描。
-        WeChatNotice.Install();
-        _noticeWatch.Tick += (_, _) =>
+        // 微信的新消息卡片只有在我们自己的菜单栏接管托盘时才需要纠位：
+        // 那时托盘在屏幕顶部，微信会把自己摆到菜单栏外面去。托盘交还 Windows 任务栏后，
+        // 微信按原生托盘算的位置本来就是对的，这时一律不碰它的窗口。
+        if (_config.Settings.MenuBar)
         {
-            if (!_fullscreen && _pauseReasons.Count == 0) WeChatNotice.Nudge();
-        };
-        _noticeWatch.Start();
+            WeChatNotice.Install();
+            _noticeWatch.Tick += (_, _) =>
+            {
+                if (!_fullscreen && _pauseReasons.Count == 0) WeChatNotice.Nudge();
+            };
+            _noticeWatch.Start();
+        }
 
         // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
         _foregroundWatcher = new ForegroundWatcher(() =>
@@ -2446,7 +2450,14 @@ internal sealed class DockWindow : Window
         if (tray == IntPtr.Zero || !IsWindowVisible(tray)) return false;
         if (!GetWindowRect(tray, out var rect)) return false;
         var bounds = CurrentDisplay().Bounds;
-        return rect.Top < bounds.Bottom - 4;   // 滑到屏幕内 = 露出来了
+        // 只有任务栏占着**Dock 这一条边**时才让开：任务栏在顶部、Dock 在底部是可以共存的，
+        // 早先的判据是"任务栏滑进屏幕内就让开"，于是把任务栏固定在顶部的用户会看到 Dock 永远不出现。
+        return Edge switch
+        {
+            DockEdge.Left => rect.Left <= bounds.Left + 4,
+            DockEdge.Right => rect.Right >= bounds.Right - 4,
+            _ => rect.Bottom >= bounds.Bottom - 4,
+        };
     }
 
     /// <summary>原生任务栏露出来时把 Dock 与玻璃板让开，避免两条叠在一起。</summary>
