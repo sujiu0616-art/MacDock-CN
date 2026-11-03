@@ -154,9 +154,66 @@ internal static class WindowActions
     public static void Minimize(IntPtr hwnd) => PostMessage(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, IntPtr.Zero);
 
     /// <summary>
-    /// 把 <paramref name="executable"/> 对应进程里"藏着"的顶层窗口显示出来并激活（缩到托盘/最小化时隐藏）。
-    /// 返回 true 表示已经有一个窗口被叫回来了，调用方就不要再启动新实例。
+    /// 应用的消息窗口/托盘宿主/输入法窗口不是"主窗口"，但它们往往有标题、面积也不小：
+    /// 微信的 <c>WxTrayIconMessageWindow</c> 是 1920×1067，按面积挑必然挑到它，
+    /// 于是从 Dock 点微信会弹出一个空白窗口（实测）。
     /// </summary>
+    static string TitleOf(IntPtr hwnd)
+    {
+        int length = GetWindowTextLength(hwnd);
+        if (length <= 0) return "";
+        var buffer = new System.Text.StringBuilder(length + 1);
+        GetWindowText(hwnd, buffer, buffer.Capacity);
+        return buffer.ToString();
+    }
+
+    static bool IsInternalWindow(IntPtr hwnd)
+    {
+        string cls = GetClassName(hwnd);
+        string title = TitleOf(hwnd);
+        static bool Looks(string s) =>
+            s.Contains("MessageWindow", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("NotifyIcon", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("TrayIcon", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("TrayHost", StringComparison.OrdinalIgnoreCase);
+        if (Looks(cls) || Looks(title)) return true;
+        return cls is "IME" or "MSCTFIME UI" or "Base_PowerMessageWindow";
+    }
+
+    /// <summary>
+    /// 在一堆隐藏/最小化的顶层窗口里挑"主窗口"：优先用系统认定的那个（Process.MainWindowHandle），
+    /// 其次才在候选里挑非 owned、面积最大的。挑错窗口是"窗口弹出来了但点不动/弹空白窗"的直接原因。
+    /// </summary>
+    static IntPtr PickMainWindow(uint pid, List<IntPtr> candidates)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
+            var main = process.MainWindowHandle;
+            if (main != IntPtr.Zero && candidates.Contains(main)) return main;
+        }
+        catch (Exception)
+        {
+            // 进程已退出/读不到：走下面的兜底
+        }
+
+        IntPtr best = IntPtr.Zero;
+        long bestArea = -1;
+        foreach (var hwnd in candidates)
+        {
+            if (IsInternalWindow(hwnd)) continue;
+            if (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero) continue;   // 有 owner：对话框/附属窗口
+            if (!GetWindowRect(hwnd, out var rect)) continue;
+            long area = (long)rect.Width * rect.Height;
+            if (area > bestArea) { bestArea = area; best = hwnd; }
+        }
+        return best != IntPtr.Zero ? best : candidates[0];
+    }
+
+    const uint GW_OWNER = 4;
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd, uint cmd);
+
+    /// <summary>把 <paramref name="executable"/> 对应进程里"藏着"的顶层窗口显示出来并激活（缩到托盘/最小化时隐藏）。
     /// <summary>把某个可执行文件对应进程里 隐藏/最小化 的顶层窗口叫回来；true = 已经叫回来了，不要再起新实例。</summary>
     public static bool SurfaceHiddenWindows(string executable)
     {
@@ -190,37 +247,38 @@ internal static class WindowActions
             long ex = (long)GetWindowLongPtr(hwnd, GWL_EXSTYLE);
             if ((ex & 0x80L) != 0) return true;                 // WS_EX_TOOLWINDOW
             if (GetWindowTextLength(hwnd) == 0) return true;      // 内部窗口
+            if (IsInternalWindow(hwnd)) return true;              // 消息窗口 / 托盘宿主 / 输入法
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) revealed.Add(hwnd);
             return true;
         }, IntPtr.Zero);
 
         if (revealed.Count == 0) return false;
-        foreach (var hwnd in revealed)
-        {
-            // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，下面那行可见性检查会读到旧状态，
-            // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
-            // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走 —— 窗口出来了却点不动。
-            ShowWindow(hwnd, SW_RESTORE);
-            if (!IsWindowVisible(hwnd)) ShowWindow(hwnd, 5);   // SW_SHOW
-            if (!IsWindowVisible(hwnd))
-                SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | 0x0040 /* SWP_SHOWWINDOW */);
-        }
 
-        // 走和主路径同一套降级链：早先这里只有 SetForegroundWindow + SwitchToThisWindow，
-        // 少一档 AttachThreadInput/SetFocus，于是"从 Dock 唤起最小化的窗口"经常只是显示、不接管输入。
-        var target = revealed.Find(h => IsWindowVisible(h) && !IsIconic(h));
-        if (target != IntPtr.Zero)
+        // 只唤起**一个主窗口**。早先这里把所有隐藏窗口全 ShowWindow 一遍：
+        // 微信"关闭到托盘"后有 5 个隐藏窗口（主窗 + 若干聊天窗），一次全弹出来之后
+        // 前台却被设在 revealed[0]（很可能是聊天窗），用户看到的就是"窗口出来了却点不动"
+        // （实测日志：Surfaced 5 window(s) of pid 18612）。
+        var target = PickMainWindow(pid, revealed);
+        // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
+        // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
+        // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走。
+        ShowWindow(target, SW_RESTORE);
+        if (!IsWindowVisible(target)) ShowWindow(target, 5);   // SW_SHOW
+        if (!IsWindowVisible(target))
+            SetWindowPos(target, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | 0x0040 /* SWP_SHOWWINDOW */);
+
+        if (IsWindowVisible(target) && !IsIconic(target))
         {
             ForceForeground(target);
             ConfirmForeground(target);
         }
 
         // 提权进程（UIPI）会无视我们的 ShowWindow：确认一下有没有真的显示出来，把结论写进日志。
-        bool shown = revealed.Exists(h => IsWindowVisible(h) && !IsIconic(h));
+        bool shown = IsWindowVisible(target) && !IsIconic(target);
         if (shown)
         {
-            Log.Info($"Surfaced {revealed.Count} window(s) of pid {pid}");
+            Log.Info($"Surfaced hwnd {target} of pid {pid} ({revealed.Count} hidden window(s) seen)");
             return true;
         }
 
