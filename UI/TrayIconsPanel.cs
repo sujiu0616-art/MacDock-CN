@@ -97,7 +97,7 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         switch (e.PropertyName)
         {
             case nameof(NotifyIcon.Icon) when _views.TryGetValue(icon, out var view):
-                ((Image)view.Child).Source = icon.Icon;
+                ((Image)view.Child).Source = Trimmed(icon.Icon);
                 break;
             case nameof(NotifyIcon.Title) when _views.TryGetValue(icon, out var view):
                 view.Tag = Tip(icon);   // 名字变了下次悬停时取新值
@@ -164,6 +164,55 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         }
     }
 
+    // macOS 菜单栏图标按 18pt 画；进来的是 48x48 的位图，先裁掉透明边再按这个尺寸等比显示。
+    // 不裁的话"满画布"的图标和"只占中间一小块"的图标会显得一大一小，一排看过去参差不齐。
+    const double IconSizeDiu = 18;
+    const double IconGapDiu = 4;   // 每个图标左右各 4 DIU ⇒ 相邻图标间 8 DIU，接近 mac 的呼吸感
+
+    /// <summary>裁掉图标四周的透明像素。不是位图、读不出来、已经满画布、或整张全透明时原样返回。</summary>
+    static ImageSource? Trimmed(ImageSource? source)
+    {
+        if (source is not System.Windows.Media.Imaging.BitmapSource sourceBitmap) return source;
+        try
+        {
+            var bgra = sourceBitmap.Format == PixelFormats.Bgra32
+                ? sourceBitmap
+                : new System.Windows.Media.Imaging.FormatConvertedBitmap(sourceBitmap, PixelFormats.Bgra32, null, 0);
+            int w = bgra.PixelWidth, h = bgra.PixelHeight;
+            if (w <= 0 || h <= 0 || w > 512 || h > 512) return sourceBitmap;
+
+            int stride = w * 4;
+            var pixels = new byte[stride * h];
+            bgra.CopyPixels(pixels, stride, 0);
+
+            int left = w, top = h, right = -1, bottom = -1;
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * stride;
+                for (int x = 0; x < w; x++)
+                {
+                    if (pixels[row + x * 4 + 3] < 8) continue;   // 只看 alpha：托盘图标普遍带透明外框
+                    if (x < left) left = x;
+                    if (x > right) right = x;
+                    if (y < top) top = y;
+                    if (y > bottom) bottom = y;
+                }
+            }
+            if (right < left || bottom < top) return sourceBitmap;                                   // 整张全透明
+            if (left == 0 && top == 0 && right == w - 1 && bottom == h - 1) return sourceBitmap;     // 已经是满画布
+
+            var crop = new System.Windows.Media.Imaging.CroppedBitmap(
+                bgra, new Int32Rect(left, top, right - left + 1, bottom - top + 1));
+            crop.Freeze();
+            return crop;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Trimming a tray icon");
+            return sourceBitmap;
+        }
+    }
+
     Border CreateView(NotifyIcon icon)
     {
         if (icon.Icon is System.Windows.Media.Imaging.BitmapSource probe && !_pixelLogged)
@@ -171,12 +220,21 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             _pixelLogged = true;
             Log.Info($"TrayIcons: pixel size {probe.PixelWidth}x{probe.PixelHeight} (source {probe.GetType().Name})");
         }
-        var image = new Image { Source = icon.Icon, Width = 16, Height = 16, Stretch = Stretch.Uniform };
+        var image = new Image
+        {
+            Source = Trimmed(icon.Icon),
+            Height = IconSizeDiu,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         var view = new Border
         {
             Child = image,
-            Padding = new Thickness(5, 0, 5, 0),
+            // 固定宽度而不是靠 Padding：每个托盘图标的"内容"宽度天差地别（有的满画布、有的只占中间一块），
+            // 用等宽容器 + 图标居中，间距才会像 mac 菜单栏那样均匀。
+            Width = IconSizeDiu + IconGapDiu * 2,
             CornerRadius = new CornerRadius(4),
             Background = Brushes.Transparent,
             VerticalAlignment = VerticalAlignment.Stretch,
