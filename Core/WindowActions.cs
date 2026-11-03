@@ -378,18 +378,6 @@ internal static class WindowActions
 
         if (IsWindowVisible(target) && !IsIconic(target))
         {
-            // 优先走任务栏通道（ITaskbarList3.ActivateTab）：点任务栏按钮 / 托盘图标走的正是这条路，
-            // 由 Explorer 完成激活，不会像我们跨进程硬抢那样引起标题栏二次重绘（用户实测：
-            // 从任务栏托盘激活时没有"× 亮一下"）。抢不到再退回自己的降级链。
-            if (ActivateViaTaskbar(target))
-            {
-                System.Threading.Thread.Sleep(30);
-                if (ForegroundReady(target))
-                {
-                    Log.Info($"Surfaced hwnd {target} of pid {pid} via ActivateTab");
-                    return true;
-                }
-            }
             ForceForeground(target);
             ConfirmForeground(target);
         }
