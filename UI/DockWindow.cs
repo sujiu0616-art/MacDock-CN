@@ -938,9 +938,9 @@ internal sealed class DockWindow : Window
     }
 
     /// <summary>
-    /// 前台窗口最大化时，把 Dock 整条铺成半透明底板，和 TranslucentTB 处理过的任务栏观感接上。
-    /// 只在"确实有最大化窗口"时出现：普通窗口（含全屏应用、启动台打开时）都不画，
-    /// 否则会在桌面上凭空多出一条灰色。
+    /// 前台窗口最大化时，在 Dock 周围铺一圈半透明底板，和 TranslucentTB 处理过的任务栏观感接上。
+    /// 只贴 Dock 那一段（玻璃板宽度 + 少量出血），**不铺满整屏** —— 铺满会把窗口左右两侧都压暗，
+    /// 看起来像屏幕底部糊了一条胶带。全屏应用、启动台打开时都不画。
     /// </summary>
     void UpdateStrip()
     {
@@ -950,12 +950,16 @@ internal sealed class DockWindow : Window
             _strip.Visibility = Visibility.Collapsed;
             return;
         }
-        double w = (double)(_windowPx.Right - _windowPx.Left) / _scale;
-        double h = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
-        if (_strip.Width != w) _strip.Width = w;
-        if (_strip.Height != h) _strip.Height = h;
-        Canvas.SetLeft(_strip, 0);
-        Canvas.SetTop(_strip, 0);
+        const double bleed = 24;   // DIU：向外扩一圈，让底板不至于紧贴玻璃板边缘
+        double left = _layout.PlateStart - bleed;
+        double width = (_layout.PlateEnd - _layout.PlateStart) + bleed * 2;
+        double top = Math.Max(0, _m.EdgeGap - bleed * 0.5);
+        double height = _m.PlateThickness + bleed;
+        _strip.Width = width;
+        _strip.Height = height;
+        Canvas.SetLeft(_strip, left);
+        Canvas.SetTop(_strip, top);
+        _strip.CornerRadius = new CornerRadius(_m.PlateRadius + bleed * 0.5);
         _strip.Background = Theme.IsDark ? StripDark : StripLight;
         _strip.Visibility = Visibility.Visible;
     }
