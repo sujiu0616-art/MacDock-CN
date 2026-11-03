@@ -297,6 +297,62 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         }
     }
 
+    // ── 原生菜单"点了外面要收" ──
+    // 微信这类 Qt 程序的托盘菜单是它自己进程里弹出的原生菜单（类名 #32768），owner 是它那个隐藏的
+    // 消息窗口；前台又不在它手上（我们的菜单栏是 WS_EX_NOACTIVATE，SetForegroundWindow 对它无效），
+    // 于是用户点菜单外面时，系统不会替它把菜单收掉 —— 菜单就赖在屏幕上。
+    // 这里补一刀：菜单出现后盯住鼠标，一旦在菜单矩形外按下，就主动让菜单取消。
+    const uint WM_CANCELMODE = 0x001F, WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
+    const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, VK_ESCAPE = 0x1B;
+    static bool _menuWatchActive;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern short GetAsyncKeyState(int vk);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool IsWindow(IntPtr hwnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    static void WatchNativeMenu()
+    {
+        if (_menuWatchActive) return;
+        _menuWatchActive = true;
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        IntPtr menu = IntPtr.Zero;
+        RECT rect = default;
+        long started = Environment.TickCount64;
+
+        timer.Tick += (_, _) =>
+        {
+            if (Environment.TickCount64 - started > 30000) { timer.Stop(); _menuWatchActive = false; return; }
+            if (menu == IntPtr.Zero)
+            {
+                menu = FindWindow("#32768", null);      // 原生弹出菜单的系统类名
+                if (menu == IntPtr.Zero) return;         // 还没弹出来
+                GetWindowRect(menu, out rect);
+                return;
+            }
+            if (!IsWindow(menu) || !IsWindowVisible(menu)) { timer.Stop(); _menuWatchActive = false; return; }
+            if (!GetCursorPos(out var cursor)) return;
+            bool inside = cursor.X >= rect.Left && cursor.X < rect.Right
+                       && cursor.Y >= rect.Top && cursor.Y < rect.Bottom;
+            if (inside) return;
+            bool pressed = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0
+                        || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+            if (!pressed) return;
+
+            Log.Info("Tray: the click outside did not dismiss the native menu - cancelling it");
+            PostMessage(menu, WM_CANCELMODE, IntPtr.Zero, IntPtr.Zero);
+            PostMessage(menu, WM_KEYDOWN, VK_ESCAPE, IntPtr.Zero);
+            PostMessage(menu, WM_KEYUP, VK_ESCAPE, IntPtr.Zero);
+            timer.Stop();
+            _menuWatchActive = false;
+        };
+        timer.Start();
+    }
+
     Border CreateView(NotifyIcon icon)
     {
         if (icon.Icon is System.Windows.Media.Imaging.BitmapSource probe && !_pixelLogged)
@@ -420,10 +476,12 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
             // 把"允许前台"的令牌交出去，右键菜单才有可能真正弹出来（微信/Qt/网易云这类都吃这条）。
             try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { }
             if (e.ChangedButton == MouseButton.Right)
-                Log.Info("Tray: right-click on <" + icon.Title + "> - forwarding to icon host");
+                Log.Info("Tray: right-click on <" + icon.Title + "> - forwarding to icon host" +
+                         (Environment.GetCommandLineArgs().Contains("--tipdiag")
+                             ? $" placement=({icon.Placement.Left},{icon.Placement.Top})-({icon.Placement.Right},{icon.Placement.Bottom})"
+                             : ""));
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
-
-            // 200ms 后清理"应用的托盘消息窗口"
+            WatchNativeMenu();   // 原生菜单可能不会自己收（owner 不在前台），补一刀
             var trayHygiene = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
             trayHygiene.Tick += (_, _) => { trayHygiene.Stop(); HideStrayTrayWindows(); };
             trayHygiene.Start();

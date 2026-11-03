@@ -136,8 +136,10 @@ internal sealed class NameTip : Window
     {
         // anchor 是"被提示元素"的屏幕矩形（DIU）：气泡贴在它下方居中，超屏则上移
         UpdateLayout();
-        double width = ActualWidth > 1 ? ActualWidth : Width;
-        double height = ActualHeight > 1 ? ActualHeight : Height;
+        // SizeToContent 的窗口在刚 Show 的那一帧 Actual* 还是 0，退回 DesiredSize，否则会按初始
+        // Width=10 去居中 —— 气泡会被算到图标右边去。
+        double width = ActualWidth > 1 ? ActualWidth : Math.Max(DesiredSize.Width, 10);
+        double height = ActualHeight > 1 ? ActualHeight : Math.Max(DesiredSize.Height, 10);
         double left = anchor.Left + anchor.Width / 2 - width / 2;
         double top = anchor.Bottom + 6;
         var work = SystemParameters.WorkArea;
@@ -145,5 +147,8 @@ internal sealed class NameTip : Window
         if (top + height > work.Bottom) top = anchor.Top - height - 6;
         Left = left;
         Top = top;
+        if (Environment.GetCommandLineArgs().Contains("--tipdiag"))
+            Log.Info($"NameTip: anchor=({anchor.Left:0},{anchor.Top:0}) {anchor.Width:0}x{anchor.Height:0} " +
+                     $"size={width:0}x{height:0} -> ({left:0},{top:0}) work=({work.Left:0},{work.Top:0}) {work.Width:0}x{work.Height:0}");
     }
 }
