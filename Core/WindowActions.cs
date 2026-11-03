@@ -72,6 +72,10 @@ internal static class WindowActions
     /// </summary>
     static bool ForceForeground(IntPtr hwnd)
     {
+        // 已经就绪就直接返回，**不要**再走一遍 BringWindowToTop / SetWindowPos / SetActiveWindow：
+        // 那会让窗口重新走一次"非活动 -> 活动"，标题栏按钮跟着重绘（用户看到"叉号闪一下"）。
+        if (ForegroundReady(hwnd)) return true;
+
         // 先无条件走一遍完整序列，最后才判定成败。
         // 为什么不再"SetForegroundWindow 成功就收工"：实测 Electron / Qt 应用会出现
         // "GetForegroundWindow() 已经是目标窗口，但目标线程的 active/focus 还是空的"，
