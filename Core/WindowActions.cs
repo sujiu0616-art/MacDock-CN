@@ -305,6 +305,10 @@ internal static class WindowActions
         // 前台却被设在 revealed[0]（很可能是聊天窗），用户看到的就是"窗口出来了却点不动"
         // （实测日志：Surfaced 5 window(s) of pid 18612）。
         var target = PickMainWindow(pid, revealed);
+
+        // 注意：曾经试过"托盘态就再启动一次应用让它自己恢复"——实测无效：
+        // 微信/等程序并不会把请求转给已运行实例，而是新起一个实例（多出进程和一个小窗），
+        // 主窗口仍然藏着。这条路已经放弃，只保留 ShowWindow + 激活的全部降级链。
         // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
         // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
         // 而 Activate 看到失败就直接 return，连 ForceForeground 都不走。
