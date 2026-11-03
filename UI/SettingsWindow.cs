@@ -45,8 +45,6 @@ internal sealed class SettingsWindow : Window
 
         panel.Children.Add(Heading(Loc.T("System")));
         panel.Children.Add(Check(Loc.T("Replace the Windows taskbar"), _settings.ReplaceTaskbar, v => _settings.ReplaceTaskbar = v));
-        panel.Children.Add(Check(Loc.T("Menu bar on top"), _settings.MenuBar, v => _settings.MenuBar = v));
-        panel.Children.Add(Check(Loc.T("Menu bar on every display"), _settings.MenuBarOnAllDisplays, v => _settings.MenuBarOnAllDisplays = v));
         panel.Children.Add(Check(Loc.T("Start with Windows"), _settings.StartWithWindows, v => _settings.StartWithWindows = v));
         panel.Children.Add(Check(Loc.T("Win+1 … Win+9 open the Dock's apps"), _settings.NumberShortcuts, v => _settings.NumberShortcuts = v));
         panel.Children.Add(LanguageRow());

@@ -37,7 +37,10 @@ internal sealed class DockSettings
     /// <summary>打开启动台的按键（Windows 虚拟键码，例如 0xB3 = 键盘上的"媒体选台"；0 = 不绑定）。</summary>
     public int LaunchpadKey { get; set; }
 
-    /// <summary>The macOS-style menu bar along the top of the screen (clock, tray icons, active app).</summary>
+    /// <summary>
+    /// 【已停用】macOS 风格菜单栏在 2026-11-04 下线（托盘交还 Windows 原生任务栏，见 HANDOVER §0）。
+    /// 字段只保留给旧配置文件解析用，没有任何代码读它。
+    /// </summary>
     public bool MenuBar { get; set; } = true;
 
     /// <summary>Interface language: "" follows Windows, otherwise "en" or "it".</summary>
@@ -46,7 +49,7 @@ internal sealed class DockSettings
     /// <summary>旧版的"精灵"缩窗动画已删除：字段保留只为兼容老配置文件的解析。</summary>
     public bool Genie { get; set; }
 
-    /// <summary>A menu bar on every monitor, as on macOS (the tray icons stay on the primary one).</summary>
+    /// <summary>【已停用】见 <see cref="MenuBar"/>：菜单栏下线后不再有多显示器菜单栏。</summary>
     public bool MenuBarOnAllDisplays { get; set; } = true;
 
     /// <summary>The monitor the dock lives on (<c>\\.\DISPLAY2</c>); empty = the primary monitor, whichever it is.</summary>

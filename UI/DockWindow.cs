@@ -107,7 +107,6 @@ internal sealed class DockWindow : Window
     bool _trashChecking, _trashRecheck;
     long _trashCheckedAt;
     bool _trashDropHover;
-    MenuBars? _menuBars;
     IntPtr _hwnd;
     uint _taskbarCreatedMessage;
     uint _quitMessage;
@@ -336,19 +335,6 @@ internal sealed class DockWindow : Window
         InteractionWatchdog.Start(Dispatcher);
         _fullscreenCheck.Start();
 
-        // 微信的新消息卡片只有在我们自己的菜单栏接管托盘时才需要纠位：
-        // 那时托盘在屏幕顶部，微信会把自己摆到菜单栏外面去。托盘交还 Windows 任务栏后，
-        // 微信按原生托盘算的位置本来就是对的，这时一律不碰它的窗口。
-        if (_config.Settings.MenuBar)
-        {
-            WeChatNotice.Install();
-            _noticeWatch.Tick += (_, _) =>
-            {
-                if (!_fullscreen && _pauseReasons.Count == 0) WeChatNotice.Nudge();
-            };
-            _noticeWatch.Start();
-        }
-
         // 事件驱动：前台一变就立刻判断（有些播放器不发 appbar 通知，靠轮询会慢半拍）
         _foregroundWatcher = new ForegroundWatcher(() =>
             Dispatcher.BeginInvoke(new Action(() =>
@@ -475,10 +461,7 @@ internal sealed class DockWindow : Window
             _replacer = new TaskbarReplacer(_config.Settings.ReplaceTaskbar);
             _replacer.Start();
             long afterTaskbar = StartupTiming.ElapsedMilliseconds;
-
-            if (_config.Settings.MenuBar) ShowMenuBar();
-            long afterMenuBar = StartupTiming.ElapsedMilliseconds;
-            Log.Info($"StartupTiming: menuBar={afterMenuBar}ms taskbarHiddenAt={afterTaskbar}ms at={DateTime.Now:HH:mm:ss.fff} deferred=yes");
+            Log.Info($"StartupTiming: taskbarReplacer={afterTaskbar}ms at={DateTime.Now:HH:mm:ss.fff} deferred=yes");
         }), System.Windows.Threading.DispatcherPriority.Background);
 
 
@@ -565,7 +548,6 @@ internal sealed class DockWindow : Window
     {
         // The taskbar first: it matters most, and nothing below may keep it from coming back.
         Try(() => _replacer?.Dispose(), "Restoring the taskbar");
-        Try(HideMenuBar, "Closing the menu bar");
         _taskbarHotkey?.Dispose();
         _taskbarHotkey = null;
         _numberShortcuts?.Dispose();
@@ -625,21 +607,7 @@ internal sealed class DockWindow : Window
         }
     }
 
-    void ShowMenuBar()
-    {
-        if (_menuBars is not null) return;
-        _menuBars = new MenuBars(DockNameFor, _config.Settings.MenuBarOnAllDisplays, _config);
-        if (_pauseReasons.Count > 0) _menuBars.SetPaused(true);
-    }
-
-    void HideMenuBar()
-    {
-        if (_menuBars is null) return;
-        _menuBars.Dispose(); // gives the reserved strips and the tray back
-        _menuBars = null;
-    }
-
-    /// <summary>The dock's name for the app that owns a window, so the menu bar and the dock agree.</summary>
+    /// <summary>The dock's name for the app that owns a window.</summary>
     string? DockNameFor(IntPtr hwnd) =>
         _pinned.Concat(_running).FirstOrDefault(i => i.Windows.Any(w => w.Handle == hwnd))?.Name;
 
@@ -1887,9 +1855,6 @@ internal sealed class DockWindow : Window
         _m = BuildMetrics();
 
         if (_replacer is { } replacer && replacer.Enabled != settings.ReplaceTaskbar) replacer.SetEnabled(settings.ReplaceTaskbar);
-        if (settings.MenuBar) ShowMenuBar();
-        else HideMenuBar();
-        _menuBars?.SetAllDisplays(settings.MenuBarOnAllDisplays);
         if (_chosenDisplay != settings.Display) _displayName = _chosenDisplay = settings.Display; // not on other changes: the dock may have followed the pointer
         UpdateFollowTimer();
         if (AutoStart.IsEnabled != settings.StartWithWindows) AutoStart.Set(settings.StartWithWindows);
@@ -1955,13 +1920,6 @@ internal sealed class DockWindow : Window
             menu.Add(replacer.TemporarilyShown ? Loc.T("Hide the Windows Taskbar") : Loc.T("Show the Windows Taskbar"),
                 replacer.ToggleTemporarilyShown, gesture: _taskbarHotkey?.Text);
         }
-        menu.Add(Loc.T("Menu Bar"), () =>
-        {
-            _config.Settings.MenuBar = _menuBars is null;
-            _config.Save();
-            if (_config.Settings.MenuBar) ShowMenuBar();
-            else HideMenuBar();
-        }, isChecked: _menuBars is not null);
         bool autoStart = AutoStart.IsEnabled;
         menu.Add(Loc.T("Start with Windows"), () =>
         {
@@ -2092,7 +2050,6 @@ internal sealed class DockWindow : Window
         _appBar?.ForgetPosition();
         Place();
         UpdateFrame();
-        _menuBars?.Sync();
         UpdateFollowTimer();
     }
 
@@ -2157,7 +2114,6 @@ internal sealed class DockWindow : Window
         if (!_pauseReasons.Add(reason) || _pauseReasons.Count > 1) return;
         Log.Info($"Paused ({reason})");
         _tracker?.SetPaused(true);
-        _menuBars?.SetPaused(true);
         _trashTimer?.Stop();
         _followTimer.Stop();
         _stack?.Close();
@@ -2175,7 +2131,6 @@ internal sealed class DockWindow : Window
         KeyLauncher.OnWinDown = OnWinKeyDown;
         KeyLauncher.OnLaunchpadTap = OnLaunchpadKey;
         KeyLauncher.Install(_config.Settings.LaunchpadKey, Environment.GetCommandLineArgs().Contains("--keylog"));
-        _menuBars?.SetPaused(false);
         _trashTimer?.Start();
         Revalidate();
         _settleTimer.Stop();
@@ -2203,7 +2158,6 @@ internal sealed class DockWindow : Window
         Place();
         UpdateFrame();
         _backdrop.Reactivate();
-        _menuBars?.Refresh();
         CheckTrash();
         UpdateFollowTimer();
     }
@@ -2297,7 +2251,6 @@ internal sealed class DockWindow : Window
                 OnPowerBroadcast((int)wParam, lParam);
                 break;
             case WM_TIMECHANGE:
-                _menuBars?.UpdateClock();
                 break;
             case WM_WINDOWPOSCHANGED:
                 _appBar?.NotifyWindowPosChanged();
@@ -2405,8 +2358,6 @@ internal sealed class DockWindow : Window
             UpdateFrame();
             Log.Info("Fullscreen invariant: dock was hidden, showed it");
         }
-
-        _menuBars?.SetFullscreen(hide);   // 幂等：菜单栏内部会自己判断是否已经一致
     }
 
     long _switchOverlaySeenAt;
@@ -2709,7 +2660,6 @@ internal sealed class DockWindow : Window
             ? $"Fullscreen: True (waited {(DateTime.UtcNow - _fullscreenWantedSince).TotalMilliseconds:0}ms{(immediate ? ", fast path" : "")}) <- {DescribeForeground()}"
             : "Fullscreen: False");
         _fullscreen = fullscreen;
-        _menuBars?.SetFullscreen(fullscreen);
 
         if (fullscreen)
         {
@@ -3022,7 +2972,6 @@ internal sealed class DockWindow : Window
         }
         foreach (var view in _views.Values) view.Refresh();
         _backdrop.ApplyTheme();
-        _menuBars?.ApplyTheme();
     }
 
     void LogDiagnostics()
