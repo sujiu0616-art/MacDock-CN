@@ -1,8 +1,8 @@
-# MacDock-CN · macOS 风格任务栏（Windows 11 中文二创版）
+# MacDock · macOS 风格任务栏（Windows 11）
 
-> **这是一个二创（derivative work）项目。**
-> 上游：[**lupanostefano/Gravitone**](https://github.com/lupanostefano/Gravitone)（MIT License，© 2026 Stefano Lupano）。
-> 本项目在其基础上做了大量修改，**不是**上游官方版本，与上游作者无关；问题请提到本仓库，不要打扰上游。
+> **独立项目，不是任何项目的官方版本。**
+> 起点代码来自 [**lupanostefano/Gravitone**](https://github.com/lupanostefano/Gravitone)（MIT License，© 2026 Stefano Lupano），此后按自己的方向开发与维护。
+> 与上游作者无关；问题请提到本仓库，不要打扰上游。
 
 把 Windows 11 的任务栏换成一个 macOS Tahoe 风格的外壳：底部 Dock + 顶部菜单栏 + 启动台，
 并且**接管**（隐藏）Windows 原生任务栏。
@@ -68,6 +68,6 @@ powershell -ExecutionPolicy Bypass -File .\tools\uninstall.ps1 -RestoreTaskbar
 
 ## 许可
 
-MIT。上游版权归 **Stefano Lupano**；本二创部分的修改版权归 **sujiu0616-art**。
+MIT。起点代码的版权归 **Stefano Lupano**；本项目新增与修改部分的版权归 **sujiu0616-art**。
 详见 [`LICENSE`](LICENSE) 与 [`NOTICE.md`](NOTICE.md)。
 第三方组件（ManagedShell 等）见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
