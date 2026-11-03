@@ -51,6 +51,17 @@ internal sealed class DockWindow : Window
     static readonly double[] PlateShadowAlphas = { 0.32, 0.55, 1.0 };
     readonly Border[] _plateShadows = { NewShadowLayer(0), NewShadowLayer(1), NewShadowLayer(2) };
 
+    /// <summary>
+    /// 窗口最大化时铺满 Dock 整条（全宽）的半透明底板。
+    /// 为什么需要：Dock 是 AppBar，最大化窗口会给它让开一条，那条露出的是桌面壁纸；
+    /// 而系统任务栏（TranslucentTB 处理过）是半透明的，两者并排就很割裂。
+    /// 这一层只在"前台窗口最大化"时出现，颜色/透明度对齐系统任务栏。
+    /// </summary>
+    readonly Border _strip = new() { IsHitTestVisible = false, Visibility = Visibility.Collapsed };
+
+    static readonly Brush StripDark = new SolidColorBrush(Color.FromArgb(0xB0, 0x20, 0x20, 0x20));
+    static readonly Brush StripLight = new SolidColorBrush(Color.FromArgb(0xB0, 0xF2, 0xF2, 0xF2));
+
     static Border NewShadowLayer(int index) => new()
     {
         IsHitTestVisible = false,
@@ -230,6 +241,7 @@ internal sealed class DockWindow : Window
 
         // Under the icons (added first): a magnified icon reaches above the plate and must not be crossed by the rim.
         _canvas.Children.Add(_hitArea);
+        _canvas.Children.Add(_strip);   // 最底层：最大化时的整条底板
         foreach (var layer in _plateShadows) _canvas.Children.Add(layer);
         _canvas.Children.Add(_plateRim);
         _canvas.Children.Add(_plateInnerSheen);
@@ -268,6 +280,8 @@ internal sealed class DockWindow : Window
         // 任何一条路径（ABN 通知、让位、兜底显示…）想偷偷改状态，这里 500ms 内拉回一致。
         _fullscreenCheck.Tick += (_, _) => EnforceFullscreenInvariant();
         _fullscreenCheck.Tick += (_, _) => SuppressForNativeTaskbar(NativeTaskbarShown());
+        // 最大化状态没有事件可听（窗口最大化/还原不会通知我们），跟着 120ms 心跳看一眼前台就行。
+        _fullscreenCheck.Tick += (_, _) => UpdateStrip();
         _fullscreenCheck.Tick += (_, _) =>
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
@@ -922,6 +936,31 @@ internal sealed class DockWindow : Window
         UpdateHitZone();
         UpdateLabel(iconBase);
     }
+
+    /// <summary>
+    /// 前台窗口最大化时，把 Dock 整条铺成半透明底板，和 TranslucentTB 处理过的任务栏观感接上。
+    /// 只在"确实有最大化窗口"时出现：普通窗口（含全屏应用、启动台打开时）都不画，
+    /// 否则会在桌面上凭空多出一条灰色。
+    /// </summary>
+    void UpdateStrip()
+    {
+        bool maximized = !_fullscreen && !_launchpadOpen && IsZoomed(GetForegroundWindow());
+        if (!maximized)
+        {
+            _strip.Visibility = Visibility.Collapsed;
+            return;
+        }
+        double w = (double)(_windowPx.Right - _windowPx.Left) / _scale;
+        double h = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
+        if (_strip.Width != w) _strip.Width = w;
+        if (_strip.Height != h) _strip.Height = h;
+        Canvas.SetLeft(_strip, 0);
+        Canvas.SetTop(_strip, 0);
+        _strip.Background = Theme.IsDark ? StripDark : StripLight;
+        _strip.Visibility = Visibility.Visible;
+    }
+
+    [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hwnd);
 
     void UpdatePlate(double slide)
     {
