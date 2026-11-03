@@ -343,8 +343,11 @@ internal static class WindowActions
         bool targetWasVisible = IsWindowVisible(target);
         if (!targetWasVisible && !IsIconic(target))
         {
+            // 托盘态走这一条就收工：应用自己恢复时已经激活过窗口，
+            // 后面再 ShowWindow + ForceForeground 会变成"二次激活"（用户看得很明显）。
             Log.Info($"pid {pid}: main window is hidden to tray, asking the app to restore itself");
             RelaunchToRestore(pid);
+            return true;
         }
         // 必须用**同步** ShowWindow：ShowWindowAsync 投递完就返回，紧接着的可见性检查会读到旧状态，
         // 于是这条路径每次都被判成 "refused to show"（实测 DeepSeek Harness 必现），
