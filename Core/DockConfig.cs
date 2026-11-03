@@ -69,10 +69,12 @@ internal sealed class DockSettings
     public bool FollowPointer { get; set; } = true;
 
     /// <summary>
-    /// 允许为"关闭到托盘"的程序再起一个实例来恢复窗口。关掉（默认）时只用 ShowWindow 唤回，
-    /// 绝不新起实例 —— 有些程序不认单实例转发，重启它只会多开一个窗口。
+    /// 允许为"关闭到托盘"的程序再起一个实例来恢复窗口（= 让应用自己走它的"从托盘恢复"逻辑）。
+    /// 默认**开**：这是唯一真正有效的恢复路径 —— Win32 的 ShowWindow 只能让窗口"看得见"，
+    /// 应用的内部状态还停在托盘里，用户点上去没反应。
+    /// 代价：不认单实例转发的程序会多开一个窗口，那种情况下可以关掉这一项。
     /// </summary>
-    public bool AllowMultipleInstances { get; set; }
+    public bool AllowMultipleInstances { get; set; } = true;
 
     public void Clamp()
     {
