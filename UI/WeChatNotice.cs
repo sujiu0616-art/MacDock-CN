@@ -18,10 +18,16 @@ namespace MacDock.UI;
 internal static class WeChatNotice
 {
     const string WindowClass = "Qt51514QWindowToolSaveBits";
-    const int EdgeGap = 8;    // 离屏幕右边缘
-    const int TopGap = 6;     // 离菜单栏下沿
+    const int EdgeGap = 12;    // 离屏幕右边缘
+    const int BottomGap = 12;  // 离工作区下沿（Dock 玻璃板上沿）
 
     const uint SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
+    const int VK_LBUTTON = 0x01;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern short GetAsyncKeyState(int vk);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hwnd, int cmd);
 
     static IntPtr _hook;
     static WinEventProc? _proc;                 // 原生侧会回调，委托必须留引用
@@ -58,6 +64,7 @@ internal static class WeChatNotice
             Apply(hwnd);
         };
         timer.Start();
+        WatchClickOutside(hwnd);
     }
 
     static void Apply(IntPtr hwnd)
@@ -67,15 +74,41 @@ internal static class WeChatNotice
         int width = rect.Right - rect.Left, height = rect.Bottom - rect.Top;
         if (width <= 0 || height <= 0) return;
 
+        // 落在右下角、Dock 玻璃板上方：和 Windows 的托盘气泡同一个习惯位置，
+        // 也不压菜单栏和窗口标题栏。Work 已经由 AppBar 让出了顶部菜单栏与底部 Dock。
         var display = Displays.ByNameOrPrimary(null);
-        int menuBottom = display.Bounds.Top + (int)Math.Ceiling(MenuBarWindow.BarHeight * display.Scale);
         int left = display.Bounds.Right - width - EdgeGap;
-        int top = menuBottom + TopGap;
+        int top = display.Work.Bottom - height - BottomGap;
         if (rect.Left == left && rect.Top == top) return;
 
         SetWindowPos(hwnd, IntPtr.Zero, left, top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         if (Placed.Add(hwnd))
             Log.Info($"WeChat notice: placed at ({left},{top}) {width}x{height} (it had put itself at {rect.Left},{rect.Top})");
+    }
+
+    /// <summary>点卡片外面就把它收掉 —— 微信自己不会（它的窗口没有前台归属）。</summary>
+    static void WatchClickOutside(IntPtr hwnd)
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        long started = Environment.TickCount64;
+        timer.Tick += (_, _) =>
+        {
+            if (Environment.TickCount64 - started > 60000 || !IsWindow(hwnd) || !IsWindowVisible(hwnd))
+            {
+                timer.Stop();
+                return;
+            }
+            if (!GetCursorPos(out var cursor) || !GetWindowRect(hwnd, out var rect)) return;
+            bool inside = cursor.X >= rect.Left && cursor.X < rect.Right
+                       && cursor.Y >= rect.Top && cursor.Y < rect.Bottom;
+            if (inside) return;
+            if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) return;
+
+            ShowWindow(hwnd, 0);   // SW_HIDE：只收窗口，未读数还在托盘图标上
+            Log.Info("WeChat notice: hidden after a click outside it");
+            timer.Stop();
+        };
+        timer.Start();
     }
 
     /// <summary>兜底：钩子万一丢了或者事件没到，低频扫一遍桌面上的卡片。</summary>
