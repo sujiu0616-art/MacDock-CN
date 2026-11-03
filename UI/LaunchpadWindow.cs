@@ -28,7 +28,7 @@ internal sealed class LaunchpadWindow : Window
     static readonly long _startedAt = Environment.TickCount64;   // 进程启动（类初始化）时刻，用于量"多久看到窗口"
     const double CellWidth = 200;
     const double CellHeight = 190;
-    const double IconSize = 120;
+    const double IconSize = 96;   // 用户要求缩小：120 -> 96（格子不变，图标小一圈、留白更多）
     const double SearchWidth = 380;
     const double SearchHeight = 38;
 
