@@ -950,13 +950,13 @@ internal sealed class DockWindow : Window
             _strip.Visibility = Visibility.Collapsed;
             return;
         }
-        // 上沿对齐玻璃板顶（再往上就压到应用上了），下沿一直铺到屏幕底边 ——
-        // 玻璃板下面那段 EdgeGap 也是"Dock 所在的区域"，不能留白。
+        // 只铺在**玻璃板下方**那一段（EdgeGap 是玻璃板到屏幕底边的空隙）。
+        // 不要从玻璃板顶开始：那个高度已经够到应用内容了，看起来就是"一块板盖在应用上"。
         double width = (double)(_windowPx.Right - _windowPx.Left) / _scale;
         double windowHeight = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
-        double top = _m.EdgeGap;
+        double top = _m.EdgeGap + _m.PlateThickness;
         _strip.Width = width;
-        _strip.Height = windowHeight - top;
+        _strip.Height = Math.Max(0, windowHeight - top);
         Canvas.SetLeft(_strip, 0);
         Canvas.SetTop(_strip, top);
         _strip.CornerRadius = new CornerRadius(0);
