@@ -614,7 +614,7 @@ internal sealed class DockWindow : Window
     void ShowMenuBar()
     {
         if (_menuBars is not null) return;
-        _menuBars = new MenuBars(DockNameFor, _config.Settings.MenuBarOnAllDisplays);
+        _menuBars = new MenuBars(DockNameFor, _config.Settings.MenuBarOnAllDisplays, _config);
         if (_pauseReasons.Count > 0) _menuBars.SetPaused(true);
     }
 

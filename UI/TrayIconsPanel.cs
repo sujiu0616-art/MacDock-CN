@@ -28,6 +28,7 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
 
     readonly TrayService _trayService = new();
     readonly NotificationArea _area;
+    readonly DockConfig _config;
     // By reference: NotifyIcon equality compares its (changing) window handle, id and GUID.
     bool _pixelLogged;
 
@@ -35,8 +36,9 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
     readonly HashSet<NotifyIcon> _subscribed = new(ReferenceEqualityComparer.Instance);
     bool _disposed;
 
-    public TrayIconsPanel()
+    public TrayIconsPanel(DockConfig config)
     {
+        _config = config;
         Orientation = Orientation.Horizontal;
         _area = new NotificationArea(NotificationArea.DEFAULT_PINNED, _trayService, new ExplorerTrayService())
         {
@@ -131,6 +133,17 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         DiagSyncs++;
         var wanted = _area.TrayIcons.Where(i => !i.IsHidden && !SystemIcons.Contains(i.GUID)).ToList();
 
+        // 用户拖出来的顺序优先；没在顺序表里的图标保持系统给的次序，排在后面。
+        // OrderBy 是稳定排序，所以"没排序过"时这一整段等价于原样。
+        var saved = _config?.Settings.TrayOrder;
+        if (saved is { Count: > 0 })
+        {
+            var rank = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int i = 0; i < saved.Count; i++)
+                if (!string.IsNullOrEmpty(saved[i])) rank[saved[i]] = i;
+            wanted = wanted.OrderBy(i => rank.TryGetValue(KeyOf(i), out int r) ? r : int.MaxValue).ToList();
+        }
+
         // Hidden icons stay subscribed: they can be shown again (NIS_HIDDEN cleared).
         foreach (var icon in _area.TrayIcons)
             if (_subscribed.Add(icon)) icon.PropertyChanged += OnIconChanged;
@@ -213,6 +226,77 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         }
     }
 
+    // ── 拖动排序（macOS 菜单栏也是把图标拖来拖去） ──
+    const double DragThreshold = 6;   // DIU：横向移动超过它才算拖动，否则仍当单击
+    Border? _pressView;
+    NotifyIcon? _pressIcon;
+    Point _pressPoint;
+    TranslateTransform? _dragTransform;
+    bool _dragging;
+
+    /// <summary>排序用的稳定标识：优先图标自己的 GUID，老式图标（无 GUID）退回应用名。</summary>
+    static string KeyOf(NotifyIcon icon) =>
+        icon.GUID != Guid.Empty ? "guid:" + icon.GUID.ToString("N") : "title:" + (icon.Title ?? "");
+
+    void BeginDrag(Border view)
+    {
+        _dragging = true;
+        _dragTransform = new TranslateTransform();
+        view.RenderTransform = _dragTransform;
+        view.Opacity = 0.65;
+        Log.Info($"Tray: dragging <{_pressIcon?.Title}>");
+    }
+
+    /// <summary>松开：按落点算出目标索引，重排并存进配置（下次启动仍然按这个顺序）。</summary>
+    void EndDrag(Point release)
+    {
+        if (_pressView is null) return;
+        var view = _pressView;
+
+        int current = Children.IndexOf(view);
+        int target = 0;
+        for (int i = 0; i < Children.Count; i++)
+        {
+            if (Children[i] is not Border other || ReferenceEquals(other, view)) continue;
+            double middle = other.TranslatePoint(new Point(other.ActualWidth / 2, 0), this).X;
+            if (release.X > middle) target = i + 1;
+        }
+        if (target != current && target != current + 1)
+        {
+            Children.Remove(view);
+            Children.Insert(Math.Clamp(target > current ? target - 1 : target, 0, Children.Count), view);
+            SaveOrder();
+        }
+
+        view.RenderTransform = Transform.Identity;
+        view.Opacity = 1;
+        _dragTransform = null;
+    }
+
+    void SaveOrder()
+    {
+        try
+        {
+            var order = new List<string>();
+            foreach (var border in Children.OfType<Border>())
+            {
+                foreach (var pair in _views)
+                {
+                    if (!ReferenceEquals(pair.Value, border)) continue;
+                    order.Add(KeyOf(pair.Key));
+                    break;
+                }
+            }
+            _config.Settings.TrayOrder = order;
+            _config.Save();
+            Log.Info("Tray: icon order saved - " + string.Join(", ", order));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Saving the tray icon order");
+        }
+    }
+
     Border CreateView(NotifyIcon icon)
     {
         if (icon.Icon is System.Windows.Media.Imaging.BitmapSource probe && !_pixelLogged)
@@ -242,6 +326,7 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
 
         view.MouseEnter += (_, _) =>
         {
+            if (_dragging) return;
             view.Background = HoverBrush;
             NameTip.ShowFor(view, Tip(icon));
             SetPlacement(icon, view);
@@ -251,55 +336,97 @@ internal sealed class TrayIconsPanel : StackPanel, IDisposable
         {
             view.Background = Brushes.Transparent;
             NameTip.HideTip();
-            icon.IconMouseLeave(MouseParam());
+            if (!_dragging) icon.IconMouseLeave(MouseParam());
         };
-        view.MouseMove += (_, _) => icon.IconMouseMove(MouseParam());
+        view.MouseMove += (_, e) =>
+        {
+            if (ReferenceEquals(_pressView, view) && !_dragging && e.LeftButton == MouseButtonState.Pressed)
+            {
+                var p = e.GetPosition(this);
+                if (Math.Abs(p.X - _pressPoint.X) >= DragThreshold) BeginDrag(view);
+            }
+            if (_dragging)
+            {
+                if (_dragTransform is not null) _dragTransform.X = e.GetPosition(this).X - _pressPoint.X;
+                return;   // 拖动中不把移动转给图标宿主，免得它以为用户在它身上滑
+            }
+            icon.IconMouseMove(MouseParam());
+        };
         view.MouseDown += (_, e) =>
         {
             SetPlacement(icon, view);
-            icon.IconMouseDown(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                // 左键先不转发：这一次可能是"把图标拖到别处"。单击的 down/up 在松开时补发，
+                // 托盘程序绝大多数在 up 里才动作，补发不会改变它们的行为。
+                _pressView = view;
+                _pressIcon = icon;
+                _pressPoint = e.GetPosition(this);
+                _dragging = false;
+                view.CaptureMouse();
+            }
+            else
+            {
+                icon.IconMouseDown(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
+            }
             e.Handled = true;
         };
         view.MouseUp += (_, e) =>
         {
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                bool dragged = _dragging;
+                if (dragged) EndDrag(e.GetPosition(this));
+                else
+                {
+                    int dbl = (int)GetDoubleClickTime();
+                    icon.IconMouseDown(MouseButton.Left, MouseParam(), dbl);
+                    icon.IconMouseUp(MouseButton.Left, MouseParam(), dbl);
+                }
+                _pressView = null;
+                _pressIcon = null;
+                _dragging = false;
+                _dragTransform = null;
+                view.ReleaseMouseCapture();
+                if (!dragged)
+                {
+                    // 微信（Qt）对托盘单击经常"吞掉"：主窗口不恢复。这里兜底把它拉出来。
+                    if (MacDock.Core.WeChatRestorer.LooksLikeWeChat(icon.Title))
+                    {
+                        var restore = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                        restore.Tick += (_, _) =>
+                        {
+                            restore.Stop();
+                            MacDock.Core.WeChatRestorer.Restore();
+                        };
+                        restore.Start();
+                    }
+                    // 200ms 后清理"应用的托盘消息窗口"（微信的 WxTrayIconMessageWindow 会被自己弹出来）
+                    var hygiene = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+                    hygiene.Tick += (_, _) => { hygiene.Stop(); HideStrayTrayWindows(); };
+                    hygiene.Start();
+                }
+                e.Handled = true;
+                return;
+            }
+
             // 托盘程序的弹出菜单（微信/Qt 那类）在自己线程里 TrackPopupMenu，
             // 前提是"这次点击发生在某个前台窗口上"。Explorer 的托盘天生满足（任务栏就是前台），
             // 我们的菜单栏不是 —— 于是菜单不出现。先把菜单栏设成前台，再把点击转给图标宿主。
-            if (e.ChangedButton is MouseButton.Right or MouseButton.Middle)
-            {
-                var bar = Window.GetWindow(view);
-                if (bar is not null) NativeMethods.SetForegroundWindow(new WindowInteropHelper(bar).Handle);
-            }
-            if (e.ChangedButton == MouseButton.Right)
-            {
-                GetCursorPos(out var cursor);
-            }
+            var bar = Window.GetWindow(view);
+            if (bar is not null) NativeMethods.SetForegroundWindow(new WindowInteropHelper(bar).Handle);
             SetPlacement(icon, view);   // 右键前重算：应用拿这个矩形算菜单锚点
             // Windows 的前台锁：非前台进程调 TrackPopupMenu 会被直接挡掉。
             // 把"允许前台"的令牌交出去，右键菜单才有可能真正弹出来（微信/Qt/网易云这类都吃这条）。
-            if (e.ChangedButton is MouseButton.Right or MouseButton.Middle)
-            {
-                try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { }
-            }
+            try { AllowSetForegroundWindow(ASFW_ANY); } catch (Exception) { }
             if (e.ChangedButton == MouseButton.Right)
                 Log.Info("Tray: right-click on <" + icon.Title + "> - forwarding to icon host");
             icon.IconMouseUp(e.ChangedButton, MouseParam(), (int)GetDoubleClickTime());
 
-            // 微信（Qt）对托盘单击经常"吞掉"：主窗口不恢复。这里兜底把它拉出来。
-            if (e.ChangedButton == MouseButton.Left && MacDock.Core.WeChatRestorer.LooksLikeWeChat(icon.Title))
-            {
-                var restore = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-                restore.Tick += (_, _) =>
-                {
-                    restore.Stop();
-                    MacDock.Core.WeChatRestorer.Restore();
-                };
-                restore.Start();
-            }
-            // 200ms 后清理"应用的托盘消息窗口"（微信的 WxTrayIconMessageWindow 会被自己弹出来）
-            var hygiene = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
-            hygiene.Tick += (_, _) => { hygiene.Stop(); HideStrayTrayWindows(); };
-            hygiene.Start();
+            // 200ms 后清理"应用的托盘消息窗口"
+            var trayHygiene = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            trayHygiene.Tick += (_, _) => { trayHygiene.Stop(); HideStrayTrayWindows(); };
+            trayHygiene.Start();
             e.Handled = true;
         };
         return view;

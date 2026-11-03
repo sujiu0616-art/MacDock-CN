@@ -26,6 +26,7 @@ internal sealed class MenuBarWindow : Window
     const double BarHeight = 32; // DIP：盖满任务栏留出的顶部预留（48px @150%），最大化窗口时不再有空隙
 
     readonly MenuBars _owner;
+    readonly DockConfig _config;
     readonly string _device;
     readonly MenuBarGlass _glass = new();
     readonly Grid _root = new() { Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) }; // alpha 1: clickable
@@ -55,9 +56,10 @@ internal sealed class MenuBarWindow : Window
     bool _placePending;
     IntPtr _placedMonitor;
 
-    public MenuBarWindow(MenuBars owner, string device, bool primary)
+    public MenuBarWindow(MenuBars owner, string device, bool primary, DockConfig config)
     {
         _owner = owner;
+        _config = config;
         _device = device;
         Title = "MacDock Menu Bar";
         WindowStyle = WindowStyle.None;
@@ -90,7 +92,7 @@ internal sealed class MenuBarWindow : Window
         _appName.VerticalAlignment = VerticalAlignment.Center;
 
         // One tray service per session: it lives in the primary monitor's bar.
-        if (primary) _tray = new TrayIconsPanel { Margin = new Thickness(0, 2, 4, 2) };
+        if (primary) _tray = new TrayIconsPanel(_config) { Margin = new Thickness(0, 2, 4, 2) };
 
         _wifiBack = Glyph("");
         _wifiBack.Opacity = 0.3;

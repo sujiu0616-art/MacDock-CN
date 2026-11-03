@@ -22,6 +22,7 @@ internal sealed class MenuBars : IDisposable
     };
 
     readonly Func<IntPtr, string?> _dockNameFor;
+    readonly DockConfig _config;
     readonly SystemStatus _status = new();
     readonly DispatcherTimer _clockTimer = new();
     readonly WinEventProc _winEventProc; // kept alive: native code calls it
@@ -33,9 +34,10 @@ internal sealed class MenuBars : IDisposable
     bool _disposed;
 
     /// <param name="dockNameFor">The dock's name for the app owning a window, when the dock shows it.</param>
-    public MenuBars(Func<IntPtr, string?> dockNameFor, bool allDisplays)
+    public MenuBars(Func<IntPtr, string?> dockNameFor, bool allDisplays, DockConfig config)
     {
         _dockNameFor = dockNameFor;
+        _config = config;
         _allDisplays = allDisplays;
         _status.Changed += () => _bars.ForEach(b => b.ShowStatus(_status));
         _clockTimer.Tick += (_, _) => UpdateClock();
@@ -84,7 +86,7 @@ internal sealed class MenuBars : IDisposable
         // The primary first: its tray service must be the one apps find.
         foreach (var display in wanted.OrderByDescending(d => d.IsPrimary))
         {
-            var bar = new MenuBarWindow(this, display.DeviceName, display.IsPrimary);
+            var bar = new MenuBarWindow(this, display.DeviceName, display.IsPrimary, _config);
             _bars.Add(bar);
             bar.Show();
             bar.ShowStatus(_status);

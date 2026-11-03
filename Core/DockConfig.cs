@@ -53,6 +53,13 @@ internal sealed class DockSettings
     public string Display { get; set; } = "";
 
     /// <summary>
+    /// 托盘图标的显示顺序（菜单栏上拖动排序的结果）。键优先用图标的 GUID（<c>guid:xxx</c>），
+    /// 没有 GUID 的老式图标退回应用名（<c>title:应用名</c>）。新增字段：老配置读进来是空表，
+    /// 就按系统给的顺序显示。
+    /// </summary>
+    public List<string> TrayOrder { get; set; } = [];
+
+    /// <summary>
     /// As on macOS: pushing the pointer against the dock's edge of another monitor brings the dock there
     /// (until the next start, when it goes back to <see cref="Display"/>).
     /// </summary>
@@ -137,6 +144,7 @@ internal sealed class DockConfig
                 if (loaded is not null)
                 {
                     loaded.Settings ??= new();
+                    loaded.Settings.TrayOrder ??= [];
                     loaded.Items ??= [];
                     loaded.Folders ??= [];
                     loaded.Settings.Clamp();
