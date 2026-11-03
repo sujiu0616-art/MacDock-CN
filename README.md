@@ -1,11 +1,13 @@
 # MacDock · macOS 风格任务栏（Windows 11）
 
+![MacDock](docs/images/macdock-desktop.png)
+
 > **独立项目，不是任何项目的官方版本。**
 > 起点代码来自 [**lupanostefano/Gravitone**](https://github.com/lupanostefano/Gravitone)（MIT License，© 2026 Stefano Lupano），此后按自己的方向开发与维护。
 > 与上游作者无关；问题请提到本仓库，不要打扰上游。
 
-把 Windows 11 的任务栏换成一个 macOS Tahoe 风格的外壳：底部 Dock + 顶部菜单栏 + 启动台，
-并且**接管**（隐藏）Windows 原生任务栏。
+屏幕底部是一条 macOS 风格的 **Dock**（波浪放大、运行提示、文件夹栈、回收站）+ 全屏**启动台**；
+屏幕顶部交还 **Windows 原生任务栏**（托盘、输入法、时钟都在它上面）。
 
 ---
 
