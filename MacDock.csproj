@@ -12,7 +12,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <StartupObject>MacDock.Program</StartupObject>
     <SatelliteResourceLanguages>it;en</SatelliteResourceLanguages>
-    <Version>0.2.1</Version>
+    <Version>1.0.0</Version>
     <ApplicationIcon>MacDock.ico</ApplicationIcon>
     <Product>MacDock</Product>
     <Company>Stefano Lupano</Company>
