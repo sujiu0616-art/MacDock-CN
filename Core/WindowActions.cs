@@ -15,6 +15,11 @@ internal static class WindowActions
     /// <summary>Restores (if minimized) and brings a window to the front.</summary>
     public static void Activate(IntPtr hwnd)
     {
+        // 先看看前台是不是 explorer 的"任务切换"遮罩：它盖住整个工作区，会把之后所有点击吃掉，
+        // 用户看到的就是"窗口出来了但点不动"。它不一定是用户按 Alt+Tab 弄出来的 ——
+        // 按 Win、点任务栏缩略图都会留下它。
+        DismissTaskSwitcherOverlay();
+
         // 句柄可能是托盘消息窗口 / tooltip / Electron 的内部 Chromium 窗口这类假窗口：
         // 先按进程把真正的主窗口叫回来。叫不回来就继续按原句柄走，别在这里提前收工
         // （早先直接 return，结果"应用有窗口但唤不起来"时什么都不做）。
@@ -421,7 +426,33 @@ internal static class WindowActions
     }
 
     const byte VK_MENU = 0x12, VK_ESCAPE = 0x1B;
+    const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+
+    /// <summary>
+    /// 收掉 explorer 的"任务切换"遮罩（<c>XamlExplorerHostIslandWindow</c>，标题"任务切换"，铺满工作区）。
+    /// 它在最前面时，别的窗口的内容区收不到点击 —— 用户会说"窗口出来了但没反应"。
+    /// 优先向它自己 PostMessage 一个 ESC（定向、不影响其他输入）；不奏效再发一次全局 ESC
+    /// （<see cref="RepairStuckTaskSwitcher"/> 用的也是这招）。空标题的同类窗口是任务栏宿主，不能碰。
+    /// </summary>
+    static void DismissTaskSwitcherOverlay()
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == IntPtr.Zero) return;
+        if (!GetClassName(foreground).Equals("XamlExplorerHostIslandWindow", StringComparison.OrdinalIgnoreCase)) return;
+        if (GetWindowTextLength(foreground) == 0) return;
+
+        PostMessage(foreground, WM_KEYDOWN, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+        PostMessage(foreground, WM_KEYUP, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+        System.Threading.Thread.Sleep(35);
+        if (GetForegroundWindow() == foreground)
+        {
+            keybd_event(VK_ESCAPE, 0, 0, UIntPtr.Zero);
+            keybd_event(VK_ESCAPE, 0, 2, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(35);
+        }
+        Log.Info($"Dismissed the task-switch overlay (hwnd {foreground}) before activating");
+    }
 
     /// <summary>Asks the window to close, exactly like its close button.</summary>
     public static void Close(IntPtr hwnd) => PostMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, IntPtr.Zero);
