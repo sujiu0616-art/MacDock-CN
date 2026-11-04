@@ -944,7 +944,14 @@ internal sealed class DockWindow : Window
     /// </summary>
     void UpdateStrip()
     {
-        bool maximized = !_fullscreen && !_launchpadOpen && IsZoomed(GetForegroundWindow());
+        // 不能直接看 GetForegroundWindow：点一下顶部任务栏/桌面，前台就变成它们，
+        // IsZoomed 立刻为 false，底板跟着一闪一闪（实测每秒跳 1~2 次）。
+        // 记住"最后一个真正的应用窗口"，用它判断是否最大化。
+        var fg = GetForegroundWindow();
+        if (!IsShellWindow(fg)) _lastAppForeground = fg;
+        var target = _lastAppForeground;
+        bool maximized = !_fullscreen && !_launchpadOpen
+            && target != IntPtr.Zero && IsWindow(target) && IsWindowVisible(target) && IsZoomed(target);
         if (!maximized)
         {
             _strip.Visibility = Visibility.Collapsed;
@@ -968,6 +975,21 @@ internal sealed class DockWindow : Window
     }
 
     [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
+
+    /// <summary>最后一个不是外壳/任务栏/桌面的前台窗口（用它判断"窗口是否最大化"才不会被点任务栏打断）。</summary>
+    IntPtr _lastAppForeground;
+
+    /// <summary>任务栏、桌面、托盘溢出这些外壳窗口 —— 它们不算"应用窗口"。</summary>
+    static bool IsShellWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return true;
+        string cls = GetClassName(hwnd);
+        return cls is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Progman" or "WorkerW"
+            || cls.StartsWith("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase)
+            || cls.Contains("XamlExplorerHostIslandWindow", StringComparison.OrdinalIgnoreCase)
+            || cls.Contains("TopLevelWindowForOverflowXamlIsland", StringComparison.OrdinalIgnoreCase);
+    }
 
     void UpdatePlate(double slide)
     {
