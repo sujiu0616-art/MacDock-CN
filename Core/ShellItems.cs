@@ -67,6 +67,14 @@ internal static class ShellItems
     /// <summary>Returns the item's icon at 256 px, trimmed and re-centred so every icon has the same visual weight.</summary>
     public static BitmapSource? Icon(string parsingName)
     {
+        // .exe 先直接从它自己的资源里抽大图标。走 shell 的 IShellItemImageFactory 时，个别程序
+        // （实测 Xournal++）拿到的是**文件类型关联图标**（一张白纸），而不是它真正画的那个图标。
+        if (parsingName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(parsingName))
+        {
+            var fromResource = FromExeResource(parsingName, IconPixels);
+            if (fromResource is not null) return Normalize(fromResource, IconPixels);
+        }
+
         var item = Create(parsingName);
         if (item is null) return null;
         try
@@ -99,6 +107,37 @@ internal static class ShellItems
     }
 
     const uint SIGDN_DESKTOPABSOLUTEPARSING = 0x80028000;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint PrivateExtractIcons(string file, int index, int cx, int cy,
+        IntPtr[] icons, uint[] iconIds, uint count, uint flags);
+
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+
+    /// <summary>按指定边长从 exe 的资源里取第 0 号图标（Windows 会挑最接近的尺寸并缩放）。</summary>
+    static BitmapSource? FromExeResource(string path, int px)
+    {
+        var handles = new IntPtr[1];
+        var ids = new uint[1];
+        try
+        {
+            if (PrivateExtractIcons(path, 0, px, px, handles, ids, 1, 0) == 0) return null;
+            if (handles[0] == IntPtr.Zero) return null;
+            var source = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                handles[0], Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+            source.Freeze();
+            return source;
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"Icon resource of {path} failed: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            if (handles[0] != IntPtr.Zero) DestroyIcon(handles[0]);
+        }
+    }
 
     [DllImport("shell32.dll")]
     static extern IntPtr ILCombine(IntPtr parent, IntPtr child);

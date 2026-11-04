@@ -17,7 +17,10 @@ internal static class Icons
     {
         if (string.IsNullOrEmpty(target)) return null;
         if (Cache.TryGetValue(target, out var cached)) return cached;
-        ImageSource? icon = IconArt.Squircle(ShellItems.Icon(target));
+        var raw = ShellItems.Icon(target);
+        ImageSource? icon = IconArt.Squircle(raw);
+        if (raw is null) Log.Info($"Icon: shell returned nothing for '{target}'");
+        else if (icon is null) Log.Info($"Icon: squircle failed for '{target}' ({raw.PixelWidth}x{raw.PixelHeight})");
         Cache[target] = icon;
         return icon;
     }
