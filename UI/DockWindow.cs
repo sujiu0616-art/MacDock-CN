@@ -51,17 +51,6 @@ internal sealed class DockWindow : Window
     static readonly double[] PlateShadowAlphas = { 0.32, 0.55, 1.0 };
     readonly Border[] _plateShadows = { NewShadowLayer(0), NewShadowLayer(1), NewShadowLayer(2) };
 
-    /// <summary>
-    /// 窗口最大化时铺满 Dock 整条（全宽）的半透明底板。
-    /// 为什么需要：Dock 是 AppBar，最大化窗口会给它让开一条，那条露出的是桌面壁纸；
-    /// 而系统任务栏（TranslucentTB 处理过）是半透明的，两者并排就很割裂。
-    /// 这一层只在"前台窗口最大化"时出现，颜色/透明度对齐系统任务栏。
-    /// </summary>
-    readonly Border _strip = new() { IsHitTestVisible = false, Visibility = Visibility.Collapsed };
-
-    static readonly Brush StripDark = new SolidColorBrush(Color.FromArgb(0xB0, 0x20, 0x20, 0x20));
-    static readonly Brush StripLight = new SolidColorBrush(Color.FromArgb(0xB0, 0xF2, 0xF2, 0xF2));
-
     static Border NewShadowLayer(int index) => new()
     {
         IsHitTestVisible = false,
@@ -241,7 +230,6 @@ internal sealed class DockWindow : Window
 
         // Under the icons (added first): a magnified icon reaches above the plate and must not be crossed by the rim.
         _canvas.Children.Add(_hitArea);
-        _canvas.Children.Add(_strip);   // 最底层：最大化时的整条底板
         foreach (var layer in _plateShadows) _canvas.Children.Add(layer);
         _canvas.Children.Add(_plateRim);
         _canvas.Children.Add(_plateInnerSheen);
@@ -944,46 +932,61 @@ internal sealed class DockWindow : Window
     /// </summary>
     void UpdateStrip()
     {
-        // 不能直接看 GetForegroundWindow：点一下顶部任务栏/桌面，前台就变成它们，
-        // IsZoomed 立刻为 false，底板跟着一闪一闪（实测每秒跳 1~2 次）。
-        // 记住"最后一个真正的应用窗口"，用它判断是否最大化。
-        var fg = GetForegroundWindow();
-        if (!IsShellWindow(fg)) _lastAppForeground = fg;
-        var target = _lastAppForeground;
-        bool maximized = !_fullscreen && !_launchpadOpen
-            && target != IntPtr.Zero && IsWindow(target) && IsWindowVisible(target) && IsZoomed(target);
-        if (!maximized)
+        // 不看前台窗口：实测前台会被 TranslucentTB / 输入法这类覆盖层抢走（每秒 1~2 次），
+        // 用它判断会让底板疯狂闪。Dock 是 AppBar，只要有**任意**窗口最大化，这条区域就被让开了 ——
+        // 所以直接枚举，结果缓存 300ms（120ms 心跳下不会每次都枚举全盘）。
+        bool maximized = !_fullscreen && !_launchpadOpen && AnyMaximizedAppWindow();
+        if (maximized != _stripOn)
         {
-            _strip.Visibility = Visibility.Collapsed;
-            return;
+            _stripOn = maximized;
+            Log.Info($"Dock plate dense={maximized} (fullscreen={_fullscreen}, launchpad={_launchpadOpen})");
         }
-        // 尺寸必须和 Place() 里向系统申请的 AppBar 预留完全一致：
-        //   reserve = (EdgeGap + PlateThickness + DockGap) * scale
-        // 那一块才是"窗口让开给 Dock 的整个区域"（实测 90 px：1510~1600）。
-        // 注意 EdgeGap 是**从屏幕底边往上**量的距离，不能当 y 坐标直接用 —— 之前那样算只剩 6 px。
-        const double DockGap = 6;
-        double windowHeight = (double)(_windowPx.Bottom - _windowPx.Top) / _scale;
-        double reserve = _m.EdgeGap + _m.PlateThickness + DockGap;
-        double top = Math.Max(0, windowHeight - reserve);
-        _strip.Width = (double)(_windowPx.Right - _windowPx.Left) / _scale;
-        _strip.Height = windowHeight - top;
-        Canvas.SetLeft(_strip, 0);
-        Canvas.SetTop(_strip, top);
-        _strip.CornerRadius = new CornerRadius(0);
-        _strip.Background = Theme.IsDark ? StripDark : StripLight;
-        _strip.Visibility = Visibility.Visible;
+        _backdrop.SetDense(maximized);
+        return;
     }
 
     [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr param);
+    delegate bool EnumWindowsCallback(IntPtr hwnd, IntPtr param);
 
-    /// <summary>最后一个不是外壳/任务栏/桌面的前台窗口（用它判断"窗口是否最大化"才不会被点任务栏打断）。</summary>
-    IntPtr _lastAppForeground;
+    bool _stripOn;              // 底板当前的显隐状态（只用于日志去重）
+    IntPtr _lastMaximizedHwnd;  // 上次记过日志的最大化窗口（诊断用）
+    bool _anyMaximized;         // 枚举结果的缓存
+    long _anyMaximizedAt;       // 上次枚举的时刻（TickCount64）
+
+    /// <summary>是否有任意一个"真的应用窗口"处于最大化（排除外壳窗口、无标题的辅助窗口、我们自己的窗口）。</summary>
+    bool AnyMaximizedAppWindow()
+    {
+        long now = Environment.TickCount64;
+        if (now - _anyMaximizedAt < 300) return _anyMaximized;
+        _anyMaximizedAt = now;
+        bool found = false;
+        EnumWindows((hwnd, _) =>
+        {
+            if (IsShellWindow(hwnd)) return true;
+            if (!IsWindowVisible(hwnd) || !IsZoomed(hwnd)) return true;
+            if (GetWindowTextLength(hwnd) == 0) return true;   // 无标题的辅助窗口不算
+            found = true;
+            if (hwnd != _lastMaximizedHwnd)
+            {
+                _lastMaximizedHwnd = hwnd;
+                Log.Info($"Maximized: hwnd={hwnd} cls={GetClassName(hwnd)} title='{GetWindowTitle(hwnd)}'");
+            }
+            return false;                                      // 找到一个就停
+        }, IntPtr.Zero);
+        _anyMaximized = found;
+        return found;
+    }
 
     /// <summary>任务栏、桌面、托盘溢出这些外壳窗口 —— 它们不算"应用窗口"。</summary>
     static bool IsShellWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return true;
+        // 我们自己的 Dock / Backdrop 也不算：它们会时不时变成前台（Reactivate、置顶窗口的激活），
+        // 混进来会把 _lastAppForeground 冲掉，底板于是每秒开关一次。
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == (uint)Environment.ProcessId) return true;
         string cls = GetClassName(hwnd);
         return cls is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Progman" or "WorkerW"
             || cls.StartsWith("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase)

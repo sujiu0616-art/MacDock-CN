@@ -21,6 +21,18 @@ namespace MacDock.UI;
 internal sealed class BackdropWindow : Window
 {
     readonly Border _tint;
+    bool _dense;
+
+    /// <summary>
+    /// 最大化时把玻璃板"加厚"：tint 从 22% 提到 ~78%，整条变成深色半透明，
+    /// 和上面最大化窗口的底色连成一体（非最大化时仍是透壁纸的淡玻璃）。
+    /// </summary>
+    public void SetDense(bool dense)
+    {
+        if (_dense == dense) return;
+        _dense = dense;
+        ApplyTheme();
+    }
     bool _visible = true;
     int _radiusPx;
 
@@ -89,9 +101,14 @@ internal sealed class BackdropWindow : Window
     {
         if (Handle == IntPtr.Zero) return;
         // 真透明：只留一层很淡的 tint，背后是壁纸、窗口还是视频都能透出来（不模糊）。
-        _tint.Background = new SolidColorBrush(Theme.IsDark
-            ? Color.FromArgb(0x38, 0x08, 0x08, 0x0C)   // 22%
-            : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)); // 25%
+        // 最大化时用 _dense：把同一层加厚到接近实心的深色，让 Dock 那条和应用窗口连成一片。
+        _tint.Background = _dense
+            ? new SolidColorBrush(Theme.IsDark
+                ? Color.FromArgb(0xC8, 0x18, 0x18, 0x1C)   // 78% 深色
+                : Color.FromArgb(0xC8, 0xF2, 0xF2, 0xF2))  // 78% 浅色
+            : new SolidColorBrush(Theme.IsDark
+                ? Color.FromArgb(0x38, 0x08, 0x08, 0x0C)   // 22%
+                : Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)); // 25%
         UpdateClip();
     }
 
