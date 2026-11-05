@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace MacDock.Core;
 
-internal enum DockEdge { Bottom, Left, Right }
+internal enum DockEdge { Bottom, Left, Right, Top }
 
 internal sealed class DockSettings
 {

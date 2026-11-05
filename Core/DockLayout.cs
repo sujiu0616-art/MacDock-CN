@@ -31,7 +31,7 @@ internal sealed class DockMetrics(double iconSize, double maxSize, DockEdge edge
     /// <summary>Highest an icon can reach: magnified, or resting and bouncing.</summary>
     public double TallestIcon => Math.Max(MaxSize, IconSize * 1.7);
     /// <summary>Room for the name label beyond the tallest icon.</summary>
-    public double LabelRoom => Edge == DockEdge.Bottom ? 44 + IconSize * 1.6 : 260; // also room to drag an icon out of the dock
+    public double LabelRoom => Edge is DockEdge.Bottom or DockEdge.Top ? 44 + IconSize * 1.6 : 260; // also room to drag an icon out of the dock
     public double WindowThickness => EdgeGap + Pad + TallestIcon + LabelRoom;
 }
 

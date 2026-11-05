@@ -116,6 +116,7 @@ internal sealed class AppBar : IDisposable
     {
         DockEdge.Left => ABE_LEFT,
         DockEdge.Right => ABE_RIGHT,
+        DockEdge.Top => ABE_TOP,
         _ => ABE_BOTTOM,
     };
 

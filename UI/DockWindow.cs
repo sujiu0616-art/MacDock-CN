@@ -704,6 +704,7 @@ internal sealed class DockWindow : Window
         {
             DockEdge.Left => new RECT(bar.Left, work.Top, bar.Left + thick, work.Bottom),
             DockEdge.Right => new RECT(bar.Right - thick, work.Top, bar.Right, work.Bottom),
+            DockEdge.Top => new RECT(display.Bounds.Left, bar.Top, display.Bounds.Right, bar.Top + thick),
             _ => new RECT(display.Bounds.Left, bar.Bottom - thick, display.Bounds.Right, bar.Bottom),
         };
         // Moving an app bar notifies the others (the menu bar), which move and notify back.
@@ -713,7 +714,7 @@ internal sealed class DockWindow : Window
         double w = _windowPx.Width / _scale, h = _windowPx.Height / _scale;
         _canvas.Width = w;
         _canvas.Height = h;
-        (_length, _thickness) = Edge == DockEdge.Bottom ? (w, h) : (h, w);
+        (_length, _thickness) = Edge is DockEdge.Bottom or DockEdge.Top ? (w, h) : (h, w);
         UpdateFrame();
     }
 
@@ -978,7 +979,7 @@ internal sealed class DockWindow : Window
         for (int i = 0; i < _plateShadows.Length; i++)
         {
             double band = PlateShadowBands[i];
-            double growUp = Edge == DockEdge.Bottom ? 0 : band;     // 上沿
+            double growUp = Edge is DockEdge.Bottom or DockEdge.Top ? 0 : band;   // 上沿（底部/顶部是横向 Dock，上沿不扩）
             double growDown = band;                                 // 下沿（没有顶置 Dock，恒长）
             double growLeft = Edge == DockEdge.Right ? 0 : band;    // 左沿
             double growRight = Edge == DockEdge.Left ? 0 : band;    // 右沿
@@ -1101,6 +1102,10 @@ internal sealed class DockWindow : Window
                 x = _thickness - beyond - size.Width;
                 y = center - size.Height / 2;
                 break;
+            case DockEdge.Top:
+                x = Math.Clamp(center - size.Width / 2, 4, Math.Max(4, _length - size.Width - 4));
+                y = beyond;
+                break;
             default:
                 x = Math.Clamp(center - size.Width / 2, 4, Math.Max(4, _length - size.Width - 4));
                 y = _thickness - beyond - size.Height;
@@ -1115,6 +1120,7 @@ internal sealed class DockWindow : Window
     {
         DockEdge.Left => new Rect(v, u, lengthV, lengthU),
         DockEdge.Right => new Rect(_thickness - v - lengthV, u, lengthV, lengthU),
+        DockEdge.Top => new Rect(u, v, lengthU, lengthV),
         _ => new Rect(u, _thickness - v - lengthV, lengthU, lengthV),
     };
 
@@ -1122,6 +1128,7 @@ internal sealed class DockWindow : Window
     {
         DockEdge.Left => (p.Y, p.X),
         DockEdge.Right => (p.Y, _thickness - p.X),
+        DockEdge.Top => (p.X, p.Y),
         _ => (p.X, _thickness - p.Y),
     };
 
@@ -2406,6 +2413,7 @@ internal sealed class DockWindow : Window
         {
             DockEdge.Left => rect.Left <= bounds.Left + 4,
             DockEdge.Right => rect.Right >= bounds.Right - 4,
+            DockEdge.Top => rect.Top <= bounds.Top + 4,
             _ => rect.Bottom >= bounds.Bottom - 4,
         };
     }
