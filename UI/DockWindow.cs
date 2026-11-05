@@ -92,6 +92,7 @@ internal sealed class DockWindow : Window
 
     DockMetrics _m;
     double _plateThickness; // the plate follows the tallest icon while the dock magnifies
+    double _breathe;        // 顶部呼吸幅度（DIU）：底板左右胀、图标按它放大
     AppBar? _appBar;
     WindowTracker? _tracker;
     TaskbarReplacer? _replacer;
@@ -905,6 +906,7 @@ internal sealed class DockWindow : Window
         // 板高恒定：app bar 预留的就是这个高度，跟着图标长高就会压到上方窗口（用户报的"一点点重叠"）。
         // 放大时图标往玻璃板上方探出来 —— 这才是 macOS 的样子。
         _plateThickness = _m.PlateThickness;
+        double maxBreathe = 0;   // 本帧所有呼吸图标里最大的放大增量
 
         for (int i = 0; i < _entries.Count; i++)
         {
@@ -929,12 +931,28 @@ internal sealed class DockWindow : Window
                 continue;
             }
             double lift = item.Bounce.Offset(now) * _m.IconSize;
+            double drawSize = size;
+            double left = start;
+            double top = iconBase + lift;
+            if (Edge == DockEdge.Top && lift > 0.01)
+            {
+                // 顶部呼吸：图标原地放大，不做上下位移（顶上是屏幕边）。
+                // 放大量上限取 Gap 的 7 成 —— 相邻两个各自向两边扩 grow/2，
+                // 加起来 2*(grow/2) = grow < Gap，所以永远不会碰到旁边的图标。
+                double grow = Math.Min(lift * 1.2, _m.Gap * 0.7);
+                maxBreathe = Math.Max(maxBreathe, grow);
+                drawSize = size + grow;
+                left = start - grow / 2;
+                top = iconBase - grow / 2;
+                lift = 0;
+            }
             view.Arrange(
-                ToWindow(start, iconBase + lift, size, size),
+                ToWindow(left, top, drawSize, drawSize),
                 ToWindow(start + (size - dot) / 2, dotV, dot, dot),
                 item.Presence);
         }
 
+        _breathe = Edge == DockEdge.Top ? maxBreathe : 0;
         UpdatePlate(slide);
         UpdateHitZone();
         UpdateLabel(iconBase);
@@ -948,7 +966,9 @@ internal sealed class DockWindow : Window
         bool visible = !_fullscreen && v1 - v0 > 0.5;
         if (visible)
         {
-            var r = ToWindow(_layout.PlateStart, v0, _layout.PlateEnd - _layout.PlateStart, v1 - v0);
+            // 顶部呼吸：底板高度不动，只让它在左右方向跟着张一点（左右有空间）
+            double grow = Edge == DockEdge.Top ? _breathe * 0.6 : 0;
+            var r = ToWindow(_layout.PlateStart - grow, v0, (_layout.PlateEnd - _layout.PlateStart) + grow * 2, v1 - v0);
             _backdrop.SetGlassRadius((int)Math.Round(_m.PlateRadius * _scale));
             _backdrop.SetBounds(new RECT(
                 _windowPx.Left + (int)Math.Round(r.Left * _scale),
