@@ -699,7 +699,11 @@ internal sealed class DockWindow : Window
         // 预留高度 = 板高 + 一条呼吸间距：原来预留刚好等于板高，最大化窗口的下边缘与玻璃板上沿
         // 落在同一像素上（视觉上就是"贴在一起/有点重叠"）。留 6 DIU 之后窗口与 Dock 之间有一条缝。
         const double DockGap = 6;
-        int reserve = settings.AutoHide ? 0 : (int)Math.Ceiling((_m.EdgeGap + _m.PlateThickness + DockGap) * _scale);
+        // 顶部 Dock 只让开 24px（macOS 菜单栏那个厚度），玻璃板剩下的部分浮在窗口上面；
+        // 底部/侧边沿用原来的算法（整块玻璃 + 呼吸间隙都让开）。
+        int reserve = settings.AutoHide ? 0
+            : Edge == DockEdge.Top ? 24
+            : (int)Math.Ceiling((_m.EdgeGap + _m.PlateThickness + DockGap) * _scale);
         var bar = _appBar.SetPosition(Edge, display.Bounds, reserve, ownEdge: true);   // 自己占住屏幕底边
         var work = display.Work;
 
@@ -829,7 +833,14 @@ internal sealed class DockWindow : Window
 
         double magnifyTarget = _hovered && _hide < 0.02 && !_menuOpen && !_dragging ? 1 : 0;
         _magnify = Approach(_magnify, magnifyTarget, dt, magnifyTarget > _magnify ? 0.045 : 0.075);
-        double hideTarget = _hideRequested ? 1 : 0;
+        // 有应用正在启动（图标在跳）时不要收起：点了图标、鼠标一移开 Dock 就藏了，
+        // 用户看不到启动过程（"图标还在跳就收起来了"）。
+        bool launching = false;
+        foreach (var entry in _entries)
+        {
+            if (entry.Bounce.Kind == BounceKind.Launch) { launching = true; break; }
+        }
+        double hideTarget = _hideRequested && !launching ? 1 : 0;
         _hide = Approach(_hide, hideTarget, dt, 0.065);
 
         bool busy = false;
