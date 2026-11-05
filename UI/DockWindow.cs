@@ -833,14 +833,16 @@ internal sealed class DockWindow : Window
 
         double magnifyTarget = _hovered && _hide < 0.02 && !_menuOpen && !_dragging ? 1 : 0;
         _magnify = Approach(_magnify, magnifyTarget, dt, magnifyTarget > _magnify ? 0.045 : 0.075);
-        // 有应用正在启动（图标在跳）时不要收起：点了图标、鼠标一移开 Dock 就藏了，
-        // 用户看不到启动过程（"图标还在跳就收起来了"）。
-        bool launching = false;
+        // 有应用正在启动（Launch 跳）或有通知（Attention 跳）时不要收起：
+        // 前者是"点了图标、鼠标一移开 Dock 就藏了，看不到启动过程"，
+        // 后者是"有通知时只让图标在跳、Dock 藏着根本看不见"。
+        bool bouncing = false;
         foreach (var entry in _entries)
         {
-            if (entry.Bounce.Kind == BounceKind.Launch) { launching = true; break; }
+            if (entry.Bounce.Kind is BounceKind.Launch or BounceKind.Attention) { bouncing = true; break; }
         }
-        double hideTarget = _hideRequested && !launching ? 1 : 0;
+        // （下面还有一处 busy 表示动画忙，别重名）
+        double hideTarget = _hideRequested && !bouncing ? 1 : 0;
         _hide = Approach(_hide, hideTarget, dt, 0.065);
 
         bool busy = false;

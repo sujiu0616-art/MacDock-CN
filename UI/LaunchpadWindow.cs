@@ -510,18 +510,15 @@ internal sealed class LaunchpadWindow : Window
         try
         {
             var rect = ScreenRect();
-            // 先把窗口显示出来：没有任何窗口时 dispatcher 会闲下来、应用直接退出（CLI 启动就是这样）。
+            // 抓屏必须在两个窗口显示之前：窗口一上屏，抓到的就是启动台自己的半透明黑底，
+            // 每开一次就黑一层 —— 深色下看起来就是一块黑板（macOS 是模糊壁纸透出来）。
+            try { _glass.SetBackdrop(ScreenFrost.Capture(rect, divisor: 4, blurRadius: 18)); }
+            catch (Exception ex) { Log.Error(ex, "Preparing the launchpad backdrop"); }
             _glass.Show();
             _glass.SetBounds(rect);
             _glass.FadeIn(EntranceMs);
             Show();
             Log.Info($"Launchpad: window shown at {Environment.TickCount64 - _startedAt}ms");
-            // 窗口已经在屏上了，这里可以安全地晚一拍抓屏（也能避开 Dock 收起的过渡帧）。
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                try { _glass.SetBackdrop(ScreenFrost.Capture(rect, divisor: 4, blurRadius: 18)); }
-                catch (Exception ex) { Log.Error(ex, "Preparing the launchpad backdrop"); }
-            }), System.Windows.Threading.DispatcherPriority.Background);
         }
         catch (Exception ex)
         {
@@ -927,9 +924,12 @@ internal sealed class LaunchpadGlass : AcrylicWindow   // 只用它的分层窗�
     /// <summary>How dark the veil is: macOS keeps the desktop readable through Launchpad, so this is a
     /// thin tint over the blur rather than the near-black sheet it used to be.</summary>
     static Color Tint(double alpha) => Theme.IsDark
-        ? Color.FromArgb((byte)Math.Round(alpha * 0xF0), 0x14, 0x14, 0x18)   // 94%：实底，白字清晰
-        : Color.FromArgb((byte)Math.Round(alpha * 0xF0), 0xF4, 0xF6, 0xFA);   // 94%：实底（真透明在全屏窗口上这台机器给不了，见笔记）
+        // macOS 深色启动台是"模糊壁纸 + 约四成暗化"，不是实底；底下的 _veil 就是那张模糊截图，
+        // 这里只负责压一层 #1C1C1E 的暗色。94% 会把壁纸完全盖住，看起来像一块黑板。
+        ? Color.FromArgb((byte)Math.Round(alpha * 0xC0), 0x14, 0x14, 0x18)   // 75%（macOS 深色启动台量级）
+        : Color.FromArgb((byte)Math.Round(alpha * 0xC0), 0xF4, 0xF6, 0xFA);   // 75%
 }
+
 
 /// <summary>
 /// <c>--launchpad</c> 的进程外壳：只为一个窗口起一个 Application，窗口关掉进程就退出；
