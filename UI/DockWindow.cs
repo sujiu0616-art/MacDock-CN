@@ -853,7 +853,7 @@ internal sealed class DockWindow : Window
                 anyBouncing = true;
                 if (i < _layout.Starts.Length) ptrTarget = _layout.Starts[i] + _layout.Sizes[i] / 2;
             }
-            if (anyBouncing) breathTarget = 0.62 + 0.38 * Math.Sin(now * 2 * Math.PI / 1.9);
+            if (anyBouncing) breathTarget = 0.50 + 0.30 * Math.Sin(now * 2 * Math.PI / 1.3);
         }
         if (breathTarget > 0) _breathPtrSet = true;
         _breath = Approach(_breath, breathTarget, dt, 0.05);
@@ -982,7 +982,7 @@ internal sealed class DockWindow : Window
         if (visible)
         {
             // 顶部呼吸：底板高度不动，只让它在左右方向跟着张一点（左右有空间）
-            double grow = Edge == DockEdge.Top ? _breathe * 0.9 : 0;
+            double grow = Edge == DockEdge.Top ? _breathe * 0.35 : 0;
             var r = ToWindow(_layout.PlateStart - grow, v0, (_layout.PlateEnd - _layout.PlateStart) + grow * 2, v1 - v0);
             _backdrop.SetGlassRadius((int)Math.Round(_m.PlateRadius * _scale));
             _backdrop.SetBounds(new RECT(
