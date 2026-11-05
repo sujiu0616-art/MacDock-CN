@@ -93,6 +93,8 @@ internal sealed class DockWindow : Window
     DockMetrics _m;
     double _plateThickness; // the plate follows the tallest icon while the dock magnifies
     double _breathe;        // 顶部呼吸幅度（DIU）：底板左右胀
+    RECT _lastPlateBounds;  // 玻璃板上一次真的 SetBounds 的像素矩形（呼吸时避免每帧 SetWindowPos）
+    int _lastGlassRadius = -1;
     double _breath;         // 平滑后的呼吸量 0..1
     double _breathPtr;      // 平滑后的呼吸中心（DIU）
     bool _breathPtrSet;
@@ -984,12 +986,24 @@ internal sealed class DockWindow : Window
             // 顶部呼吸：底板高度不动，只让它在左右方向跟着张一点（左右有空间）
             double grow = Edge == DockEdge.Top ? _breathe * 0.35 : 0;
             var r = ToWindow(_layout.PlateStart - grow, v0, (_layout.PlateEnd - _layout.PlateStart) + grow * 2, v1 - v0);
-            _backdrop.SetGlassRadius((int)Math.Round(_m.PlateRadius * _scale));
-            _backdrop.SetBounds(new RECT(
+            var bounds = new RECT(
                 _windowPx.Left + (int)Math.Round(r.Left * _scale),
                 _windowPx.Top + (int)Math.Round(r.Top * _scale),
                 _windowPx.Left + (int)Math.Round(r.Right * _scale),
-                _windowPx.Top + (int)Math.Round(r.Bottom * _scale)));
+                _windowPx.Top + (int)Math.Round(r.Bottom * _scale));
+            int radius = (int)Math.Round(_m.PlateRadius * _scale);
+            // 玻璃板是**独立窗口**，SetBounds 会走一次 SetWindowPos —— 每帧都发的话呼吸就抖。
+            // 只在像素级真的变了才动它；位置一像素都没变时连圆角都不用重设。
+            if (radius != _lastGlassRadius)
+            {
+                _lastGlassRadius = radius;
+                _backdrop.SetGlassRadius(radius);
+            }
+            if (!bounds.Equals(_lastPlateBounds))
+            {
+                _lastPlateBounds = bounds;
+                _backdrop.SetBounds(bounds);
+            }
             PlacePlateEdges(r);
         }
         else
