@@ -731,9 +731,9 @@ internal sealed class DockWindow : Window
                         ?? _running.FirstOrDefault(r => r.Identity.Matches(window.Identity));
             if (owner is null)
             {
-                if (window.Identity.Key is null) continue; // nothing to group it by
-                owner = new DockItem(window);
-                _running.Add(owner);
+                // 未固定的应用不再临时出现在 Dock 里：顶部 Windows 原生任务栏已经在显示它们。
+                // Dock 只保留用户自己固定的项（想要的话在图标右键里"在程序坞中保留"）。
+                continue;
             }
             owner.Windows.Add(window);
         }
