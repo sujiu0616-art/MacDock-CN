@@ -791,7 +791,10 @@ internal sealed class DockWindow : Window
     {
         // The app is already in front: nothing to call attention to.
         if (window.Handle == GetForegroundWindow()) return;
-        OwnerOf(window)?.Bounce.Start(BounceKind.Attention, Now);
+        // 最小化到托盘的窗口不在任何分组里（OwnerOf 靠 Windows 列表匹配会落空），
+        // 回退按身份找固定的那个图标 —— 否则托盘应用闪任务栏，Dock 一点反应都没有。
+        var owner = OwnerOf(window) ?? _pinned.FirstOrDefault(p => p.Identity.Matches(window.Identity));
+        owner?.Bounce.Start(BounceKind.Attention, Now);
         EnsureAnimating();
     }
 
@@ -921,10 +924,11 @@ internal sealed class DockWindow : Window
         foreach (var item in _entries) _slots.Add(new DockSlot(item.Kind == DockItemKind.App, item.Presence));
         // 呼吸量与中心都来自 OnRendering 的平滑结果（_breath / _breathPtr）。
         // 直接把 Bounce 的抛物线喂给布局，相邻图标每帧都会跳一下；平滑之后才是"鼓起来"。
-        double? dockPointer = _pointer ?? (_breathPtrSet && _breath > 0.004 ? _breathPtr : null);
-        double dockAmount = Math.Max(_magnify, _breath);
-        double rangeScale = _pointer is null && _breath > 0.004 ? 0.72 : 1;   // 左右邻居只轻微跟着鼓
-        _layout.Compute(_m, _slots, _length, dockPointer, dockAmount, 1, rangeScale);
+        // 悬停和呼吸各走各的通路：鼠标在哪里就放大哪里，通知图标自己鼓自己的，互不覆盖。
+        double? breathCentre = _breathPtrSet && _breath > 0.004 ? _breathPtr : null;
+        _layout.Compute(_m, _slots, _length,
+            _pointer, _magnify, 1, 1,          // 鼠标悬停：原始影响半径
+            breathCentre, _breath, 0.72);      // 通知呼吸：邻居只轻微跟
         _breathe = _breath * _m.IconSize;
 
         _hoverIndex = -1;

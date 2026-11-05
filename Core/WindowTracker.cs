@@ -121,6 +121,13 @@ internal sealed class WindowTracker : IDisposable
         }
     }
 
+    /// <summary>把一个已经不在窗口表里的 hwnd 包成最小可用的 TrackedWindow（只为识别归属）。</summary>
+    TrackedWindow? Ghost(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return null;
+        var identity = AppIdentity.FromWindow(hwnd, GetClassName(hwnd));
+        return identity.Key is null ? null : new TrackedWindow(hwnd, identity);
+    }
     /// <summary>Call from the owner window's WndProc; returns true when the message was ours.</summary>
     public bool HandleMessage(int msg, IntPtr wParam, IntPtr lParam)
     {
@@ -133,7 +140,17 @@ internal sealed class WindowTracker : IDisposable
                 MarkActivated(lParam);
                 break;
             case HSHELL_FLASH:
-                if (_windows.TryGetValue(lParam, out var flashing)) AttentionRequested?.Invoke(flashing);
+                if (_windows.TryGetValue(lParam, out var flashing))
+                {
+                    AttentionRequested?.Invoke(flashing);
+                }
+                else
+                {
+                    // 最小化到托盘的窗口已经从列表里移除，但 HSHELL_FLASH 照样会来。
+                    // 现场按 hwnd 拼一个身份发出去，Dock 那边按进程/AUMID 匹配就能认领。
+                    var ghost = Ghost(lParam);
+                    if (ghost is not null) AttentionRequested?.Invoke(ghost);
+                }
                 break;
             case HSHELL_REDRAW:
                 UpdateTitle(lParam);

@@ -54,7 +54,8 @@ internal sealed class DockLayout
     /// <param name="length">Length of the dock window along the edge.</param>
     /// <param name="pointer">Pointer position along the dock, or null when it has never been over it.</param>
     /// <param name="amount">0 = at rest, 1 = fully magnified (animated on enter / leave).</param>
-    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1)
+    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1,
+        double? pointer2 = null, double amount2 = 0, double rangeScale2 = 1)
     {
         int n = slots.Count;
         if (Starts.Length != n)
@@ -90,14 +91,17 @@ internal sealed class DockLayout
             // _magSlots 按 scale 变宽，后面的 origin/Starts 自然把相邻图标推开，
             // 所以"放大 + 让位"用不着在渲染层重算间距。分隔符不参与。
             double scale = slots[i].IsIcon ? uniform : 1;
-            if (slots[i].IsIcon && pointer is double p && amount > 0)
+            double bump = 0;
+            // 两组独立的放大源：pointer=鼠标悬停，pointer2=通知呼吸。位置和强度都不同，
+            // 各算各的再用 Math.Max 叠加 —— 共用一组参数的话，鼠标一划到 Dock 上，
+            // 呼吸的图标整个就不鼓了（用户："通知呼吸会我悬停干扰"）。
+            if (slots[i].IsIcon)
             {
-                // rangeScale 收紧影响半径：呼吸时传 0.72，左右邻居只轻微跟着鼓；
-                // 鼠标悬停仍用原始 Range（划过去时那一串依次放大是想要的）。
-                double range = m.Range * rangeScale;
-                double d = Math.Abs(p - (pos + s * slots[i].Presence / 2));
-                if (d < range) scale += (m.MaxSize / s - 1) * (1 + Math.Cos(Math.PI * d / range)) / 2 * amount;
+                double centreHere = pos + s * slots[i].Presence / 2;
+                bump = Math.Max(bump, Bump(pointer, amount, rangeScale, centreHere, m, s));
+                bump = Math.Max(bump, Bump(pointer2, amount2, rangeScale2, centreHere, m, s));
             }
+            scale += bump;
             _magSlots[i] = _restSlots[i] * scale;
             Sizes[i] = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence * scale;
             magTotal += _magSlots[i];
@@ -152,5 +156,15 @@ internal sealed class DockLayout
             if (u >= Starts[i] - gapBefore / 2 && u <= Starts[i] + Sizes[i] + gapAfter / 2) return i;
         }
         return -1;
+    }
+
+    /// <summary>一个高斯放大 bump 在某个槽位上的增量（0 表示不在影响半径内）。</summary>
+    static double Bump(double? centre, double amount, double rangeScale, double slotCentre, DockMetrics m, double iconSize)
+    {
+        if (centre is not double c || amount <= 0) return 0;
+        double range = m.Range * rangeScale;
+        double d = Math.Abs(c - slotCentre);
+        if (d >= range) return 0;
+        return (m.MaxSize / iconSize - 1) * (1 + Math.Cos(Math.PI * d / range)) / 2 * amount;
     }
 }
