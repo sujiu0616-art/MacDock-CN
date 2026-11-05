@@ -93,7 +93,9 @@ internal sealed class DockWindow : Window
     DockMetrics _m;
     double _plateThickness; // the plate follows the tallest icon while the dock magnifies
     double _breathe;        // 顶部呼吸幅度（DIU）：底板左右胀
-    RECT _lastPlateBounds;  // 玻璃板上一次真的 SetBounds 的像素矩形（呼吸时避免每帧 SetWindowPos）
+    // 初值给 -1：default(RECT) 是全 0，恰好等于"还没 Place 完"的那一帧算出来的矩形，
+    // 于是第一次 SetBounds 被缓存吃掉，玻璃板会停在窗口默认的 -32768 位置上。
+    RECT _lastPlateBounds = new RECT { Left = -1, Top = -1, Right = -1, Bottom = -1 };
     int _lastGlassRadius = -1;
     double _breath;         // 平滑后的呼吸量 0..1
     double _breathPtr;      // 平滑后的呼吸中心（DIU）
@@ -1023,14 +1025,21 @@ internal sealed class DockWindow : Window
 
     void PlacePlateEdges(Rect plate)
     {
-        // 呼吸每帧给的浮点差异不该每一帧都变成一次布局：按像素量化后相同就跳过
-        var key = new Rect(Math.Round(plate.X), Math.Round(plate.Y), Math.Round(plate.Width), Math.Round(plate.Height));
-        if (key.Equals(_lastEdgePlate)) return;
-        _lastEdgePlate = key;
-
         // 拖动中被拖的图标槽位会关闭，玻璃板随之缩窄；浅色玻璃和深色阴影层是两个窗口，
         // 重绘不同步时会露出半截深色（用户截图抓到过）。拖动期间干脆不画阴影。
         bool shown = plate.Width > 0.5 && plate.Height > 0.5 && !_dragging;
+        if (!shown)
+        {
+            _lastEdgePlate = Rect.Empty;   // 隐藏后下次显示必须重排，不能命中缓存
+        }
+        else
+        {
+            // 呼吸每帧给的浮点差异不该每帧都变成一次布局：按像素量化，相同就跳过。
+            // 注意只能对有效矩形做量化 —— Rect.Empty / NaN 会让 new Rect 直接抛异常。
+            var key = new Rect(Math.Round(plate.X), Math.Round(plate.Y), Math.Round(plate.Width), Math.Round(plate.Height));
+            if (key.Equals(_lastEdgePlate)) return;
+            _lastEdgePlate = key;
+        }
         var visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         _plateRim.Visibility = _plateHighlight.Visibility = _plateInnerSheen.Visibility = visibility;
         foreach (var layer in _plateShadows) layer.Visibility = visibility;
