@@ -268,6 +268,9 @@ internal sealed class DockWindow : Window
         // 任何一条路径（ABN 通知、让位、兜底显示…）想偷偷改状态，这里 500ms 内拉回一致。
         _fullscreenCheck.Tick += (_, _) => EnforceFullscreenInvariant();
         _fullscreenCheck.Tick += (_, _) => SuppressForNativeTaskbar(NativeTaskbarShown());
+        // 拖动/移动别的窗口时，同级的 TOPMOST 窗口可能抢到 Dock 上面（用户：拖窗口时 Dock 被顶出去）。
+        // 每 120ms 只看一眼玻璃板中心点归谁，被盖住就重新置顶。
+        _fullscreenCheck.Tick += (_, _) => EnsureDockOnTop();
         _fullscreenCheck.Tick += (_, _) =>
         {
             // 兜底扫描（毫秒级拦截靠 StripGuard 的 WinEvent 钩子，这里只兜"钩子装好之前就存在的窗口"）
@@ -2407,6 +2410,32 @@ internal sealed class DockWindow : Window
     /// Explorer 的任务栏当前是否"露出来了"。
     /// 注意：自动隐藏模式下它**一直是 WS_VISIBLE**，只是被挪到屏幕外 —— 不能只看 IsWindowVisible。
     /// </summary>
+    /// <summary>
+    /// Dock 是否被别的窗口压住了。拖动/移动窗口时，同级的 TOPMOST 窗口会抢到我们上面，
+    /// 表现就是"Dock 被顶出去"。这里只看玻璃板中心点归谁，被盖住就把自己和玻璃板重新置顶。
+    /// </summary>
+    void EnsureDockOnTop()
+    {
+        if (_fullscreen || _hide > 0.5 || _launchpadOpen || _hwnd == IntPtr.Zero) return;
+        if (_windowPx.Width <= 0 || _windowPx.Height <= 0) return;
+
+        var point = new POINT
+        {
+            X = _windowPx.Left + _windowPx.Width / 2,
+            Y = _windowPx.Top + Math.Max(4, _windowPx.Height / 6),   // 玻璃板所在的那一带
+        };
+        var under = WindowFromPoint(point);
+        if (under == IntPtr.Zero || under == _hwnd || under == _backdrop.Handle) return;
+
+        SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(_backdrop.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        Log.Info($"Dock was covered by hwnd {under}, brought back to front");
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X, Y; }
     bool NativeTaskbarShown()
     {
         var tray = TaskbarState.FindExplorerTray();
