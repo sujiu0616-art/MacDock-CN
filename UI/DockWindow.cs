@@ -92,7 +92,10 @@ internal sealed class DockWindow : Window
 
     DockMetrics _m;
     double _plateThickness; // the plate follows the tallest icon while the dock magnifies
-    double _breathe;        // 顶部呼吸幅度（DIU）：底板左右胀、图标按它放大
+    double _breathe;        // 顶部呼吸幅度（DIU）：底板左右胀
+    double _breath;         // 平滑后的呼吸量 0..1
+    double _breathPtr;      // 平滑后的呼吸中心（DIU）
+    bool _breathPtrSet;
     AppBar? _appBar;
     WindowTracker? _tracker;
     TaskbarReplacer? _replacer;
@@ -835,6 +838,22 @@ internal sealed class DockWindow : Window
 
         double magnifyTarget = _hovered && _hide < 0.02 && !_menuOpen && !_dragging ? 1 : 0;
         _magnify = Approach(_magnify, magnifyTarget, dt, magnifyTarget > _magnify ? 0.045 : 0.075);
+        // 顶部呼吸的平滑：Bounce 是条抛物线，直接把原始值喂给布局，相邻图标每帧都会跳一下，
+        // 而且 pointer 跟着跳会让整排左右晃。这里先指数逼近成 _breath / _breathPtr 再交给帧。
+        double breathTarget = 0, ptrTarget = _breathPtrSet ? _breathPtr : (_length > 0 ? _length / 2 : 0);
+        if (Edge == DockEdge.Top)
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                double off = _entries[i].Bounce.Offset(now);
+                if (off <= breathTarget) continue;
+                breathTarget = off;
+                if (i < _layout.Starts.Length) ptrTarget = _layout.Starts[i] + _layout.Sizes[i] / 2;
+            }
+        }
+        if (breathTarget > 0) _breathPtrSet = true;
+        _breath = Approach(_breath, Math.Min(1, breathTarget * 4.5), dt, 0.04);
+        _breathPtr = Approach(_breathPtr, ptrTarget, dt, 0.06);
         // 有应用正在启动（Launch 跳）或有通知（Attention 跳）时不要收起：
         // 前者是"点了图标、鼠标一移开 Dock 就藏了，看不到启动过程"，
         // 后者是"有通知时只让图标在跳、Dock 藏着根本看不见"。
@@ -888,26 +907,13 @@ internal sealed class DockWindow : Window
 
         _slots.Clear();
         foreach (var item in _entries) _slots.Add(new DockSlot(item.Kind == DockItemKind.App, item.Presence));
-        // _magSlots 变宽、origin/Starts 重新分配，相邻图标自动让位，和鼠标划过时一模一样。
-        // 顶部呼吸：只让"正在跳的那个图标"和它左右两个鼓起来 —— 直接借悬停放大那条通路，
-        // 把 Bounce 最强的那个图标当成一个虚拟的指针位置传给布局，magnify 的高斯 bump
-        // 自然会让它和两侧邻居放大、其余不动（Range 决定波及范围）。
-        double? breathePointer = null;
-        double breatheAmount = 0;
-        if (Edge == DockEdge.Top)
-        {
-            for (int i = 0; i < _entries.Count; i++)
-            {
-                double off = _entries[i].Bounce.Offset(Now);
-                if (off <= breatheAmount) continue;
-                breatheAmount = off;
-                if (i < _layout.Starts.Length) breathePointer = _layout.Starts[i] + _layout.Sizes[i] / 2;
-            }
-        }
-        _breathe = breatheAmount * _m.IconSize;
-        double? dockPointer = _pointer ?? breathePointer;
-        double dockAmount = Math.Max(_magnify, Math.Min(1, breatheAmount * 4.5));
-        _layout.Compute(_m, _slots, _length, dockPointer, dockAmount);
+        // 呼吸量与中心都来自 OnRendering 的平滑结果（_breath / _breathPtr）。
+        // 直接把 Bounce 的抛物线喂给布局，相邻图标每帧都会跳一下；平滑之后才是"鼓起来"。
+        double? dockPointer = _pointer ?? (_breathPtrSet && _breath > 0.004 ? _breathPtr : null);
+        double dockAmount = Math.Max(_magnify, _breath);
+        double rangeScale = _pointer is null && _breath > 0.004 ? 0.72 : 1;   // 左右邻居只轻微跟着鼓
+        _layout.Compute(_m, _slots, _length, dockPointer, dockAmount, 1, rangeScale);
+        _breathe = _breath * _m.IconSize;
 
         _hoverIndex = -1;
         if (_hovered && _pointer is double p && _hide < 0.02 && !_menuOpen && !_dragging)

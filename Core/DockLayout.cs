@@ -54,7 +54,7 @@ internal sealed class DockLayout
     /// <param name="length">Length of the dock window along the edge.</param>
     /// <param name="pointer">Pointer position along the dock, or null when it has never been over it.</param>
     /// <param name="amount">0 = at rest, 1 = fully magnified (animated on enter / leave).</param>
-    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1)
+    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1)
     {
         int n = slots.Count;
         if (Starts.Length != n)
@@ -92,8 +92,11 @@ internal sealed class DockLayout
             double scale = slots[i].IsIcon ? uniform : 1;
             if (slots[i].IsIcon && pointer is double p && amount > 0)
             {
+                // rangeScale 收紧影响半径：呼吸时传 0.72，左右邻居只轻微跟着鼓；
+                // 鼠标悬停仍用原始 Range（划过去时那一串依次放大是想要的）。
+                double range = m.Range * rangeScale;
                 double d = Math.Abs(p - (pos + s * slots[i].Presence / 2));
-                if (d < m.Range) scale += (m.MaxSize / s - 1) * (1 + Math.Cos(Math.PI * d / m.Range)) / 2 * amount;
+                if (d < range) scale += (m.MaxSize / s - 1) * (1 + Math.Cos(Math.PI * d / range)) / 2 * amount;
             }
             _magSlots[i] = _restSlots[i] * scale;
             Sizes[i] = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence * scale;
