@@ -939,7 +939,7 @@ internal sealed class DockWindow : Window
                 // 顶部呼吸：图标原地放大，不做上下位移（顶上是屏幕边）。
                 // 放大量上限取 Gap 的 7 成 —— 相邻两个各自向两边扩 grow/2，
                 // 加起来 2*(grow/2) = grow < Gap，所以永远不会碰到旁边的图标。
-                double grow = Math.Min(lift * 1.2, _m.Gap * 0.7);
+                double grow = Math.Min(lift * 2.2, _m.Gap * 0.95);
                 maxBreathe = Math.Max(maxBreathe, grow);
                 drawSize = size + grow;
                 left = start - grow / 2;
@@ -967,7 +967,7 @@ internal sealed class DockWindow : Window
         if (visible)
         {
             // 顶部呼吸：底板高度不动，只让它在左右方向跟着张一点（左右有空间）
-            double grow = Edge == DockEdge.Top ? _breathe * 0.6 : 0;
+            double grow = Edge == DockEdge.Top ? _breathe * 0.9 : 0;
             var r = ToWindow(_layout.PlateStart - grow, v0, (_layout.PlateEnd - _layout.PlateStart) + grow * 2, v1 - v0);
             _backdrop.SetGlassRadius((int)Math.Round(_m.PlateRadius * _scale));
             _backdrop.SetBounds(new RECT(
