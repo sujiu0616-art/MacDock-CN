@@ -10,6 +10,7 @@ internal enum BounceKind { None, Launch, Attention }
 internal sealed class Bouncer
 {
     const double LaunchPeriod = 0.62, LaunchHeight = 0.5, LaunchTimeout = 12;
+    const double AttentionTimeout = 20;   // 兜底：通知最多提醒 20 秒
     const double AttentionPeriod = 0.5, AttentionHeight = 0.65, AttentionPause = 1.1;
     const int AttentionBounces = 3;
 
@@ -46,6 +47,9 @@ internal sealed class Bouncer
         if (!IsActive) return 0;
         double t = now - _start;
         if (Kind == BounceKind.Launch && t > LaunchTimeout && !_stopping) Stop(now);
+        // Attention 原本没有超时，完全依赖"窗口被激活"来 Stop。用户如果用别的方式把窗口
+        // 调到前台而 tracker 没抓到（或者根本没切），呼吸就会一直挂在那个图标上。
+        if (Kind == BounceKind.Attention && t > AttentionTimeout && !_stopping) Stop(now);
 
         bool resting = Kind == BounceKind.Attention && t % Cycle >= AttentionBounces * AttentionPeriod;
         if (_stopping && (resting || BounceIndex(t) > _stopAfterBounce))

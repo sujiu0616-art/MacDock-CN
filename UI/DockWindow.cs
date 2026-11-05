@@ -853,6 +853,10 @@ internal sealed class DockWindow : Window
             bool anyBouncing = false;
             for (int i = 0; i < _entries.Count; i++)
             {
+                // 必须先推一次 Offset：Bouncer 在 Stop() 之后是靠 Offset 内部把 Kind 清成 None
+                // （等当前这一下跳完）。呼吸改成正弦后不再逐帧读 Offset，不推它的话
+                // "窗口已经调到前台了" Kind 还挂着 Attention，呼吸就永远停不下来。
+                _entries[i].Bounce.Offset(now);
                 if (!_entries[i].Bounce.IsActive) continue;
                 anyBouncing = true;
                 if (i < _layout.Starts.Length) ptrTarget = _layout.Starts[i] + _layout.Sizes[i] / 2;
