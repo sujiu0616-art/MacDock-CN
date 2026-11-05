@@ -1279,7 +1279,12 @@ internal sealed class DockWindow : Window
         _dragU = u;
         _dragV = v;
         _pointer = u;
-        bool remove = v > _m.EdgeGap + _m.PlateThickness + _m.IconSize * 0.6;
+        // 拖出移除的阈值。底部：玻璃板外沿再往下一点就是屏幕外，所以那个距离就够；
+        // 顶部：玻璃板下面是**屏幕内的空白**（窗口还有一百多 DIU），沿用同一个值会导致
+        // "稍微往下拖一点图标就被移除"。顶部改成接近窗口下沿才算拖出去。
+        bool remove = Edge == DockEdge.Top
+            ? v > _thickness * 0.85
+            : v > _m.EdgeGap + _m.PlateThickness + _m.IconSize * 0.6;
         if (remove != _dragRemove)
         {
             // Out of the dock its slot closes up; back in, it opens again.
