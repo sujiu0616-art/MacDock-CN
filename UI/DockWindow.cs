@@ -1018,8 +1018,16 @@ internal sealed class DockWindow : Window
     /// its window region), the sheen along the side facing away from the screen edge, and a soft
     /// shadow. An empty rect hides them, while the dock slides away or a full-screen app is in front.
     /// </summary>
+    /// <summary>PlacePlateEdges 上一次排过的像素矩形；呼吸每帧给的浮点差异不该都变成一次布局。</summary>
+    Rect _lastEdgePlate = Rect.Empty;
+
     void PlacePlateEdges(Rect plate)
     {
+        // 呼吸每帧给的浮点差异不该每一帧都变成一次布局：按像素量化后相同就跳过
+        var key = new Rect(Math.Round(plate.X), Math.Round(plate.Y), Math.Round(plate.Width), Math.Round(plate.Height));
+        if (key.Equals(_lastEdgePlate)) return;
+        _lastEdgePlate = key;
+
         // 拖动中被拖的图标槽位会关闭，玻璃板随之缩窄；浅色玻璃和深色阴影层是两个窗口，
         // 重绘不同步时会露出半截深色（用户截图抓到过）。拖动期间干脆不画阴影。
         bool shown = plate.Width > 0.5 && plate.Height > 0.5 && !_dragging;

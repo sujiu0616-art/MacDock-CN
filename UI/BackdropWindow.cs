@@ -23,6 +23,7 @@ internal sealed class BackdropWindow : Window
     readonly Border _tint;
     bool _visible = true;
     int _radiusPx;
+    int _lastWidth = -1, _lastHeight = -1;   // 上次重建 clip 时的尺寸
 
     public BackdropWindow()
     {
@@ -61,7 +62,13 @@ internal sealed class BackdropWindow : Window
         if (Handle == IntPtr.Zero || r.Width <= 0 || r.Height <= 0) return;
         SetWindowPos(Handle, IntPtr.Zero, r.Left, r.Top, r.Width, r.Height,
             SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-        UpdateClip();
+        // 圆角裁剪只跟尺寸有关：只挪位置时不用重建几何（呼吸时每帧重建会拖着渲染层）
+        if (r.Width != _lastWidth || r.Height != _lastHeight)
+        {
+            _lastWidth = r.Width;
+            _lastHeight = r.Height;
+            UpdateClip();
+        }
     }
 
     /// <summary>Corner radius in physical pixels (0 = square). WPF wants device-independent units.</summary>
