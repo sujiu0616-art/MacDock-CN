@@ -16,7 +16,7 @@ internal sealed class DockMetrics(double iconSize, double maxSize, DockEdge edge
     /// <summary>Plate padding around the icons.</summary>
     public double Pad => Math.Round(IconSize * 0.06);   // 板高 = 图标 + 2*Pad ≈ 1.12×（更扁；macOS 约 1.12~1.15×）
     /// <summary>Space between two resting icons.</summary>
-    public double Gap => IconSize * 0.105;   // 图标之间的间距（原 0.075，用户要求稍微大一点）
+    public double Gap => IconSize * 0.135;   // 图标之间的间距（0.075 -> 0.105 -> 0.135）
     /// <summary>Width of the separator slot between pinned and running apps (the line sits in its middle).</summary>
     public double SeparatorWidth => Math.Round(IconSize * 0.28);
     /// <summary>How far from the pointer icons are still magnified.</summary>
