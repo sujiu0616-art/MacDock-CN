@@ -840,19 +840,23 @@ internal sealed class DockWindow : Window
         _magnify = Approach(_magnify, magnifyTarget, dt, magnifyTarget > _magnify ? 0.045 : 0.075);
         // 顶部呼吸的平滑：Bounce 是条抛物线，直接把原始值喂给布局，相邻图标每帧都会跳一下，
         // 而且 pointer 跟着跳会让整排左右晃。这里先指数逼近成 _breath / _breathPtr 再交给帧。
+        // 只要还有图标在跳（Launch 启动中 / Attention 有通知），就让中心图标一直呼吸，
+        // 不用 Bounce 的"三下停一下"节奏（那个节奏留给人眼去找，太碎）。周期 1.9 秒的正弦，
+        // 幅度 0.62±0.38，也就是 24%~100%，_breath 本身就是 0..1 的放大系数。
         double breathTarget = 0, ptrTarget = _breathPtrSet ? _breathPtr : (_length > 0 ? _length / 2 : 0);
         if (Edge == DockEdge.Top)
         {
+            bool anyBouncing = false;
             for (int i = 0; i < _entries.Count; i++)
             {
-                double off = _entries[i].Bounce.Offset(now);
-                if (off <= breathTarget) continue;
-                breathTarget = off;
+                if (!_entries[i].Bounce.IsActive) continue;
+                anyBouncing = true;
                 if (i < _layout.Starts.Length) ptrTarget = _layout.Starts[i] + _layout.Sizes[i] / 2;
             }
+            if (anyBouncing) breathTarget = 0.62 + 0.38 * Math.Sin(now * 2 * Math.PI / 1.9);
         }
         if (breathTarget > 0) _breathPtrSet = true;
-        _breath = Approach(_breath, Math.Min(1, breathTarget * 4.5), dt, 0.04);
+        _breath = Approach(_breath, breathTarget, dt, 0.05);
         _breathPtr = Approach(_breathPtr, ptrTarget, dt, 0.06);
         // 有应用正在启动（Launch 跳）或有通知（Attention 跳）时不要收起：
         // 前者是"点了图标、鼠标一移开 Dock 就藏了，看不到启动过程"，
@@ -1029,7 +1033,7 @@ internal sealed class DockWindow : Window
         {
             double band = PlateShadowBands[i];
             double growUp = Edge is DockEdge.Bottom or DockEdge.Top ? 0 : band;   // 上沿（底部/顶部是横向 Dock，上沿不扩）
-            double growDown = band;                                 // 下沿：顶置 Dock 在顶部时阴影正好朝下
+            double growDown = Edge == DockEdge.Top ? band * 0.35 : band;   // 顶部：阴影收窄，否则会漏到玻璃板下面一截
             double growLeft = Edge == DockEdge.Right ? 0 : band;    // 左沿
             double growRight = Edge == DockEdge.Left ? 0 : band;    // 右沿
             var layer = _plateShadows[i];
