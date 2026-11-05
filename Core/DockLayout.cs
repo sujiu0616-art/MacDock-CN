@@ -54,7 +54,7 @@ internal sealed class DockLayout
     /// <param name="length">Length of the dock window along the edge.</param>
     /// <param name="pointer">Pointer position along the dock, or null when it has never been over it.</param>
     /// <param name="amount">0 = at rest, 1 = fully magnified (animated on enter / leave).</param>
-    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount)
+    public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1)
     {
         int n = slots.Count;
         if (Starts.Length != n)
@@ -86,7 +86,10 @@ internal sealed class DockLayout
         for (int i = 0; i < n; i++)
         {
             _restStarts[i] = pos;
-            double scale = 1;
+            // uniform：整排图标统一放大（顶部呼吸用）。和悬停放大走同一条通路 ——
+            // _magSlots 按 scale 变宽，后面的 origin/Starts 自然把相邻图标推开，
+            // 所以"放大 + 让位"用不着在渲染层重算间距。分隔符不参与。
+            double scale = slots[i].IsIcon ? uniform : 1;
             if (slots[i].IsIcon && pointer is double p && amount > 0)
             {
                 double d = Math.Abs(p - (pos + s * slots[i].Presence / 2));

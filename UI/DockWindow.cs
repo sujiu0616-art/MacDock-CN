@@ -537,6 +537,7 @@ internal sealed class DockWindow : Window
         if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) SlideInAtStartup();
         Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms at={DateTime.Now:HH:mm:ss.fff} procStart={System.Diagnostics.Process.GetCurrentProcess().StartTime:HH:mm:ss.fff}");
         Place();
+
     }
 
     protected override void OnClosed(EventArgs e)
@@ -887,7 +888,26 @@ internal sealed class DockWindow : Window
 
         _slots.Clear();
         foreach (var item in _entries) _slots.Add(new DockSlot(item.Kind == DockItemKind.App, item.Presence));
-        _layout.Compute(_m, _slots, _length, _pointer, _magnify);
+        // _magSlots 变宽、origin/Starts 重新分配，相邻图标自动让位，和鼠标划过时一模一样。
+        // 顶部呼吸：只让"正在跳的那个图标"和它左右两个鼓起来 —— 直接借悬停放大那条通路，
+        // 把 Bounce 最强的那个图标当成一个虚拟的指针位置传给布局，magnify 的高斯 bump
+        // 自然会让它和两侧邻居放大、其余不动（Range 决定波及范围）。
+        double? breathePointer = null;
+        double breatheAmount = 0;
+        if (Edge == DockEdge.Top)
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                double off = _entries[i].Bounce.Offset(Now);
+                if (off <= breatheAmount) continue;
+                breatheAmount = off;
+                if (i < _layout.Starts.Length) breathePointer = _layout.Starts[i] + _layout.Sizes[i] / 2;
+            }
+        }
+        _breathe = breatheAmount * _m.IconSize;
+        double? dockPointer = _pointer ?? breathePointer;
+        double dockAmount = Math.Max(_magnify, Math.Min(1, breatheAmount * 4.5));
+        _layout.Compute(_m, _slots, _length, dockPointer, dockAmount);
 
         _hoverIndex = -1;
         if (_hovered && _pointer is double p && _hide < 0.02 && !_menuOpen && !_dragging)
@@ -906,7 +926,6 @@ internal sealed class DockWindow : Window
         // 板高恒定：app bar 预留的就是这个高度，跟着图标长高就会压到上方窗口（用户报的"一点点重叠"）。
         // 放大时图标往玻璃板上方探出来 —— 这才是 macOS 的样子。
         _plateThickness = _m.PlateThickness;
-        double maxBreathe = 0;   // 本帧所有呼吸图标里最大的放大增量
 
         for (int i = 0; i < _entries.Count; i++)
         {
@@ -930,29 +949,15 @@ internal sealed class DockWindow : Window
                 view.Arrange(_dragRect, new Rect(0, 0, 0, 0), 1);
                 continue;
             }
-            double lift = item.Bounce.Offset(now) * _m.IconSize;
-            double drawSize = size;
-            double left = start;
-            double top = iconBase + lift;
-            if (Edge == DockEdge.Top && lift > 0.01)
-            {
-                // 顶部呼吸：图标原地放大，不做上下位移（顶上是屏幕边）。
-                // 放大量上限取 Gap 的 7 成 —— 相邻两个各自向两边扩 grow/2，
-                // 加起来 2*(grow/2) = grow < Gap，所以永远不会碰到旁边的图标。
-                double grow = Math.Min(lift * 2.2, _m.Gap * 0.95);
-                maxBreathe = Math.Max(maxBreathe, grow);
-                drawSize = size + grow;
-                left = start - grow / 2;
-                top = iconBase - grow / 2;
-                lift = 0;
-            }
+            // 尺寸来自布局（已含呼吸的 uniform 放大），这里只管上下位置：
+            // 顶部没有"上方"可跳，lift 归零；底部保持原来的弹跳位移。
+            double lift = Edge == DockEdge.Top ? 0 : item.Bounce.Offset(now) * _m.IconSize;
             view.Arrange(
-                ToWindow(left, top, drawSize, drawSize),
+                ToWindow(start, iconBase + lift, size, size),
                 ToWindow(start + (size - dot) / 2, dotV, dot, dot),
                 item.Presence);
         }
 
-        _breathe = Edge == DockEdge.Top ? maxBreathe : 0;
         UpdatePlate(slide);
         UpdateHitZone();
         UpdateLabel(iconBase);
