@@ -955,7 +955,9 @@ internal sealed class DockWindow : Window
     /// </summary>
     void PlacePlateEdges(Rect plate)
     {
-        bool shown = plate.Width > 0.5 && plate.Height > 0.5;
+        // 拖动中被拖的图标槽位会关闭，玻璃板随之缩窄；浅色玻璃和深色阴影层是两个窗口，
+        // 重绘不同步时会露出半截深色（用户截图抓到过）。拖动期间干脆不画阴影。
+        bool shown = plate.Width > 0.5 && plate.Height > 0.5 && !_dragging;
         var visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         _plateRim.Visibility = _plateHighlight.Visibility = _plateInnerSheen.Visibility = visibility;
         foreach (var layer in _plateShadows) layer.Visibility = visibility;
@@ -980,7 +982,7 @@ internal sealed class DockWindow : Window
         {
             double band = PlateShadowBands[i];
             double growUp = Edge is DockEdge.Bottom or DockEdge.Top ? 0 : band;   // 上沿（底部/顶部是横向 Dock，上沿不扩）
-            double growDown = band;                                 // 下沿（没有顶置 Dock，恒长）
+            double growDown = band;                                 // 下沿：顶置 Dock 在顶部时阴影正好朝下
             double growLeft = Edge == DockEdge.Right ? 0 : band;    // 左沿
             double growRight = Edge == DockEdge.Left ? 0 : band;    // 右沿
             var layer = _plateShadows[i];
@@ -1279,12 +1281,7 @@ internal sealed class DockWindow : Window
         _dragU = u;
         _dragV = v;
         _pointer = u;
-        // 拖出移除的阈值。底部：玻璃板外沿再往下一点就是屏幕外，所以那个距离就够；
-        // 顶部：玻璃板下面是**屏幕内的空白**（窗口还有一百多 DIU），沿用同一个值会导致
-        // "稍微往下拖一点图标就被移除"。顶部改成接近窗口下沿才算拖出去。
-        bool remove = Edge == DockEdge.Top
-            ? v > _thickness * 0.85
-            : v > _m.EdgeGap + _m.PlateThickness + _m.IconSize * 0.6;
+        bool remove = v > _m.EdgeGap + _m.PlateThickness + _m.IconSize * 0.6;
         if (remove != _dragRemove)
         {
             // Out of the dock its slot closes up; back in, it opens again.
