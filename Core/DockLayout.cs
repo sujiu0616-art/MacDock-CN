@@ -108,24 +108,54 @@ internal sealed class DockLayout
             pos += _restSlots[i];
         }
         double magLength = Math.Max(s, magTotal - g);
-
-        // 2. 整排始终居中，靠两侧对称扩张来容纳放大。
-        // 不要去"把指针下的那一点钉住"：那样鼠标每移 1px，origin 也跟着移 1px，
-        // 整排图标就跟着指针平移，看起来就是滑动时图标在抖。macOS 的 Dock 也是居中的。
-        double origin = (length - magLength) / 2;
-        // 3. Never leave the screen.
-        if (origin - m.Pad < 0) origin = m.Pad;
-        if (origin + magLength + m.Pad > length) origin = length - magLength - m.Pad;
-
-        pos = origin;
+        // 2. 位移 = 放大量的积分（macOS 的做法）：
+        //    每个图标 = 静止位置 + 它左边所有图标长出来的宽度之和。
+        //    这样每个图标只被推走"自己该让出的那份"，不重叠也不累积误差。
+        double[] grow = new double[n];
         for (int i = 0; i < n; i++)
         {
-            Starts[i] = pos;
-            pos += _magSlots[i];
+            double baseW = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence;
+            grow[i] = Sizes[i] - baseW;
         }
-        PlateStart = origin - m.Pad;
-        PlateEnd = origin + magLength + m.Pad;
+
+        double cum = 0;
+        for (int i = 0; i < n; i++)
+        {
+            Starts[i] = _restStarts[i] + cum;
+            cum += grow[i];
+        }
+
+        // 3. 整体偏移只补偿"钟形被屏幕边截断"的那部分：
+        //    左右各看 4 个图标的宽度增量，取差的一半。
+        //    指针在 Dock 中间时左右相等 → offset = 0 → 整排一动不动（macOS 就是这样）。
+        //    之前用 origin = (length - magLength)/2，magLength 是整排总宽，指针一移动它就变，
+        //    整排被拽着平移 —— 那就是抖。
+        if (pointer is double pt && amount > 0 && n > 1)
+        {
+            int at = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (pt >= _restStarts[i] && pt < _restStarts[i] + _restSlots[i]) { at = i; break; }
+                if (pt >= _restStarts[i]) at = i;
+            }
+            double leftGrow = 0, rightGrow = 0;
+            for (int i = Math.Max(0, at - 4); i < at; i++) leftGrow += grow[i];
+            for (int i = at + 1; i <= Math.Min(n - 1, at + 4); i++) rightGrow += grow[i];
+            double offset = 0.5 * (leftGrow - rightGrow);
+            for (int i = 0; i < n; i++) Starts[i] += offset;
+        }
+
+        // 4. Never leave the screen.
+        {
+            double left = Starts[0] - m.Pad;
+            double right = Starts[n - 1] + Sizes[n - 1] + m.Pad;
+            if (left < 0) { for (int i = 0; i < n; i++) Starts[i] -= left; right -= left; }
+            if (right > length) { double d = right - length; for (int i = 0; i < n; i++) Starts[i] -= d; }
+        }
+        PlateStart = Starts[0] - m.Pad;
+        PlateEnd = Starts[n - 1] + Sizes[n - 1] + m.Pad;
     }
+
 
     /// <summary>Where a resting position ends up in the magnified strip (relative to its start).</summary>
     double MapRestToMagnified(double p, double restStart, double restLength, double magLength)
