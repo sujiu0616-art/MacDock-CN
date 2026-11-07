@@ -143,14 +143,32 @@ internal sealed class DockLayout
 
             if (breathing)
             {
+                // 呼吸只放大**尺寸**，不动 centre：
+                // smoothui 的位移带 centreShift，而呼吸量每帧都在变，
+                // 那个补偿会让整排每帧平移一次 —— 那正是呼吸时的抖动。
+                // 放大需要的空间在循环后统一从间隙里扣（总宽锁定），所以也不会重叠。
                 double delta2 = centreRest - (pointer2!.Value - restStart);
                 scale += gain2 * Falloff(delta2, distance2);
-                centre += gain2 * (FalloffIntegral(delta2, distance2) - shift2);
             }
             // 两个 bump 叠起来最多到"悬停最大尺寸"，不再往上涨
             scale = Math.Min(scale, m.MaxSize / s);
             Sizes[i] = s * slots[i].Presence * scale;
             Starts[i] = restStart + centre - Sizes[i] / 2;
+        }
+
+        // 呼吸（且没有鼠标悬停）：总宽锁定在 restLength，放大只吃间隙。
+        // 这样左边界恒为 restStart，整排永远不漂；间隙扣到 0 就相贴，也不会重叠。
+        if (breathing && !magnifying && n > 1)
+        {
+            double iconTotal = 0;
+            for (int i = 0; i < n; i++) iconTotal += Sizes[i];
+            double gapEach = Math.Max(0, (restLength - iconTotal) / (n - 1));
+            double p = restStart;
+            for (int i = 0; i < n; i++)
+            {
+                Starts[i] = p;
+                p += Sizes[i] + (i < n - 1 ? gapEach : 0);
+            }
         }
 
         // 槽位（ItemAt / 相邻间隙用）：一格 = 从本图标左边到下一个图标左边
