@@ -109,11 +109,10 @@ internal sealed class DockLayout
         }
         double magLength = Math.Max(s, magTotal - g);
 
-        // 2. Keep the point under the pointer still, so the dock grows away from it on both sides.
+        // 2. 整排始终居中，靠两侧对称扩张来容纳放大。
+        // 不要去"把指针下的那一点钉住"：那样鼠标每移 1px，origin 也跟着移 1px，
+        // 整排图标就跟着指针平移，看起来就是滑动时图标在抖。macOS 的 Dock 也是居中的。
         double origin = (length - magLength) / 2;
-        if (pointer is double pt && amount > 0 && n > 0)
-            origin = pt - MapRestToMagnified(pt, restStart, restLength, magLength);
-
         // 3. Never leave the screen.
         if (origin - m.Pad < 0) origin = m.Pad;
         if (origin + magLength + m.Pad > length) origin = length - magLength - m.Pad;
