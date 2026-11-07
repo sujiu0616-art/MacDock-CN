@@ -890,7 +890,10 @@ internal sealed class DockWindow : Window
                 anyBouncing = true;
                 if (i < _layout.Starts.Length) ptrTarget = _layout.Starts[i] + _layout.Sizes[i] / 2;
             }
-            if (anyBouncing) breathTarget = 0.50 + 0.30 * Math.Sin(now * 2 * Math.PI / 1.3);
+            // 用 macOS Dock 弹跳的实测关键帧（23 点 / 120fps / 峰值 128）当呼吸曲线，
+            // 正弦是"匀速呼吸"、没有弹的重量感；这条是"弹一下 + 轻颤一下"。
+            // Apple 文档里 informationalRequest 只弹 1 秒，这里按用户要求循环播放。
+            if (anyBouncing) breathTarget = 0.25 + 0.75 * SampleBounce(now / 0.9);
         }
         if (breathTarget > 0) _breathPtrSet = true;
         _breath = Approach(_breath, breathTarget, dt, 0.05);
@@ -932,6 +935,25 @@ internal sealed class DockWindow : Window
         }
     }
 
+    /// <summary>
+    /// macOS Dock 弹跳的实测关键帧，归一化到 0..1。phase 是 0..1 的循环相位。
+    /// 原始数据（kFactorsMaxValue=128）：先 0→184→0 的大跳，再 0→32→0 的小回落。
+    /// </summary>
+    static readonly double[] BounceCurve =
+    [
+        0, 83, 100, 114, 124, 138, 156, 184, 156, 138, 124, 114, 100, 83, 32, 0,
+        0, 18, 28, 32, 28, 18, 0,
+    ];
+
+    static double SampleBounce(double phase)
+    {
+        phase -= Math.Floor(phase);
+        double x = phase * (BounceCurve.Length - 1);
+        int i = (int)x;
+        int j = Math.Min(i + 1, BounceCurve.Length - 1);
+        double f = x - i;
+        return (BounceCurve[i] * (1 - f) + BounceCurve[j] * f) / 184.0;
+    }
     /// <summary>Exponential ease towards the target; snaps when close enough.</summary>
     static double Approach(double current, double target, double dt, double tau)
     {
