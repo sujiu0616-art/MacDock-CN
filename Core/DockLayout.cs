@@ -104,7 +104,7 @@ internal sealed class DockLayout
             pos += _restSlots[i];
         }
 
-        double shift = 0;
+        double shift = 0, shift2 = 0;
         bool magnifying = gain > 0.0001 && pointer is double && n > 1;
         if (magnifying)
         {
@@ -113,6 +113,18 @@ internal sealed class DockLayout
             double last = (_restStarts[n - 1] - restStart + _restSlots[n - 1] / 2) - ptr;
             shift = (FalloffIntegral(first, distance) + FalloffIntegral(last, distance)) * 0.5
                   + s * (Falloff(last, distance) - Falloff(first, distance)) * 0.25;
+        }
+
+        // 呼吸也用同一条通路（放大 + 推动），只是中心是通知图标。
+        // 之前"只放大不推动"会让图标互相盖住，丑；压幅度又不够明显。
+        bool breathing = gain2 > 0.0001 && pointer2 is double && n > 1;
+        if (breathing)
+        {
+            double p2r = pointer2!.Value - restStart;
+            double f2 = (_restStarts[0] - restStart + _restSlots[0] / 2) - p2r;
+            double l2 = (_restStarts[n - 1] - restStart + _restSlots[n - 1] / 2) - p2r;
+            shift2 = (FalloffIntegral(f2, distance2) + FalloffIntegral(l2, distance2)) * 0.5
+                   + s * (Falloff(l2, distance2) - Falloff(f2, distance2)) * 0.25;
         }
 
         for (int i = 0; i < n; i++)
@@ -129,14 +141,14 @@ internal sealed class DockLayout
                 centre += gain * (FalloffIntegral(delta, distance) - shift);
             }
 
-            // 通知呼吸：只放大、不推动（幅度卡在间距的 9 成，两个相邻同时呼吸也不相交）
-            if (pointer2 is double p2 && gain2 > 0.0001)
+            if (breathing)
             {
-                double delta2 = centreRest - (p2 - restStart);
-                double bump2 = Math.Min(gain2 * Falloff(delta2, distance2), m.Gap * 0.9 / s);
-                scale = Math.Max(scale, 1 + bump2);
+                double delta2 = centreRest - (pointer2!.Value - restStart);
+                scale += gain2 * Falloff(delta2, distance2);
+                centre += gain2 * (FalloffIntegral(delta2, distance2) - shift2);
             }
-
+            // 两个 bump 叠起来最多到"悬停最大尺寸"，不再往上涨
+            scale = Math.Min(scale, m.MaxSize / s);
             Sizes[i] = s * slots[i].Presence * scale;
             Starts[i] = restStart + centre - Sizes[i] / 2;
         }
