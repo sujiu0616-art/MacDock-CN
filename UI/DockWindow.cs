@@ -43,7 +43,9 @@ internal sealed class DockWindow : Window
     readonly List<DockSlot> _slots = [];
     readonly Dictionary<DockItem, DockItemView> _views = [];
     readonly Canvas _canvas = new();
-    readonly Rectangle _hitArea = new() { Fill = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)) };
+    // alpha 必须 >= 2：分层窗口里 alpha=1 的像素会被当成完全透明直接穿透（鼠标到不了窗口），
+    // 收起状态下顶部那条唤醒带就形同消失，鼠标推到最上面也唤不出 Dock。
+    readonly Rectangle _hitArea = new() { Fill = new SolidColorBrush(Color.FromArgb(2, 0, 0, 0)) };
     // The plate's own edges: DWM gives the glass its blur, nothing in it gives a rim, a sheen or a shadow.
     // 阴影三层叠加：外圈最宽最淡、内圈最窄最深 → 不用 BlurEffect 也能得到自然衰减，
     // 单层同 alpha 的环一旦看边角就是一整圈"相框"。
