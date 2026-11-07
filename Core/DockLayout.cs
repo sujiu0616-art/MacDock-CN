@@ -58,7 +58,7 @@ internal sealed class DockLayout
     const double BreatheScale = 0.18;
 
     public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1,
-        double? pointer2 = null, double amount2 = 0, double rangeScale2 = 1)
+        int breatheIndex = -1, double amount2 = 0, double rangeScale2 = 1)
     {
         int n = slots.Count;
         if (Starts.Length != n)
@@ -107,7 +107,7 @@ internal sealed class DockLayout
             pos += _restSlots[i];
         }
 
-        double shift = 0, shift2 = 0;
+        double shift = 0;
         bool magnifying = gain > 0.0001 && pointer is double && n > 1;
         // 居中补偿（smoothui 的 centreShift）**故意不用**。
         // 它的前提是"容器宽度固定 = 静止宽度"，图标放大后会溢出，所以要拉回中心。
@@ -116,17 +116,11 @@ internal sealed class DockLayout
         // 它就把一个随指针连续变化的位移加到整排上，那正是滑动时的抖动。
         // 去掉之后：Starts[i] = restStart + centre，左边界恒等于静止位置，零漂移。
 
-        // 呼吸也用同一条通路（放大 + 推动），只是中心是通知图标。
-        // 之前"只放大不推动"会让图标互相盖住，丑；压幅度又不够明显。
-        bool breathing = gain2 > 0.0001 && pointer2 is double && n > 1;
-        if (breathing)
-        {
-            double p2r = pointer2!.Value - restStart;
-            double f2 = (_restStarts[0] - restStart + _restSlots[0] / 2) - p2r;
-            double l2 = (_restStarts[n - 1] - restStart + _restSlots[n - 1] / 2) - p2r;
-            shift2 = (FalloffIntegral(f2, distance2) + FalloffIntegral(l2, distance2)) * 0.5
-                   + s * (Falloff(l2, distance2) - Falloff(f2, distance2)) * 0.25;
-        }
+        // 呼吸：breatheIndex 是呼吸图标的**索引**。
+        // 之前传的是坐标，而那个坐标来自上一帧放大后的 Starts，和这里的静止相对坐标
+        // 不是同一个系，delta 能差出一百多，Falloff 直接归零 —— 表现就是"呼吸完全看不到"。
+        // 传索引就没有任何坐标换算问题。
+        bool breathing = gain2 > 0.0001 && breatheIndex >= 0 && breatheIndex < n && n > 1;
 
         for (int i = 0; i < n; i++)
         {
@@ -144,12 +138,12 @@ internal sealed class DockLayout
 
             if (breathing)
             {
-                // 幅度固定 10%：设计规范里 attention pulse 就是 1.0 -> 1.1 -> 1.0
-                // （animate_kit PulseAnimation: minScale 0.9 / 900ms / easeInOut）。
-                // 我们的 Gap 是 13.5%，10% 的放大压不到邻居，所以不需要推动，
-                // 也就没有任何位移 —— 抖动在这一层被彻底去掉。
-                double delta2 = centreRest - (pointer2!.Value - restStart);
-                scale += BreatheScale * Falloff(delta2, distance2);
+                // 幅度满幅 BreatheScale（18%），乘 amount2（0..1 的呼吸曲线）才有起伏。
+                // 位置一概不动（不改 centre），所以呼吸期间整排零位移。
+                // 我们的 Gap 是 13.5%，18% 只压进 4.5%（约 2px），肉眼几乎看不出重叠。
+                double breatheCentre = _restStarts[breatheIndex] - restStart + _restSlots[breatheIndex] / 2;
+                double delta2 = centreRest - breatheCentre;
+                scale += BreatheScale * amount2 * Falloff(delta2, distance2);
             }
             // 两个 bump 叠起来最多到"悬停最大尺寸"，不再往上涨
             scale = Math.Min(scale, m.MaxSize / s);
