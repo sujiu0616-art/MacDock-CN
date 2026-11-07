@@ -992,7 +992,11 @@ internal sealed class DockWindow : Window
         }
         _layout.Compute(_m, _slots, _length,
             _pointer, _magnify, 1, 1,          // 鼠标悬停
-            breatheIndex, _breath, 0.72);      // 通知呼吸（索引 + 曲线值）
+            // 呼吸：B 是中心，A/C 只轻轻跟一点，再往外一律不动。
+            // Range = IconSize * 2.6 = 83 DIU，系数 0.60 → 半径 49.8 DIU；
+            // 一格的中心距是 36.3，所以 A/C 落在 Falloff ≈ 0.18 → 幅度约 3.2%（B 是 18%），
+            // 第二格（72 DIU）已经超出半径，完全不参与。
+            breatheIndex, _breath, 0.60);
         _breathe = _breath * _m.IconSize;
 
         _hoverIndex = -1;
