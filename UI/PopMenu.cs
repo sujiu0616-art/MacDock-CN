@@ -261,7 +261,7 @@ internal sealed class PopMenu : IDisposable
 
     // ── 显示 / 关闭 ───────────────────────────────────────────────────────
     /// <summary>在屏幕坐标处弹出（自动夹在工作区内）。</summary>
-    public void Show(int x, int y)
+    public void Show(int x, int y, int avoidTop = int.MinValue)
     {
         Log.Info($"PopMenu: opened at {x},{y}");
         _window.Show();
@@ -276,6 +276,8 @@ internal sealed class PopMenu : IDisposable
         if (left + w > work.Right - 6) left = (int)(x - w - 2);
         if (top + h > work.Bottom - 6) top = (int)(work.Bottom - h - 6);
         if (top < work.Top + 6) top = work.Top + 6;
+        // avoidTop：Dock 贴在屏幕顶部时，菜单不能压住 Dock（否则会盖掉图标）
+        if (avoidTop != int.MinValue && top < avoidTop) top = avoidTop;
         if (left < work.Left + 6) left = work.Left + 6;
 
         NativeMethods.SetWindowPos(_window.Handle(), HWND_TOPMOST, left, top, 0, 0,

@@ -1368,7 +1368,11 @@ internal sealed class DockWindow : Window
             EnsureAnimating();
         };
         _menuOpen = true;
-        menu.Show(this, _hwnd, _foregroundAtPress);
+            // Dock 贴在屏幕顶部时，菜单往下弹也要让开玻璃板，否则整个盖在 Dock 上
+            int avoidTop = Edge == DockEdge.Top
+                ? _windowPx.Top + (int)Math.Round((_m.EdgeGap + _m.PlateThickness) * _scale) + 6
+                : int.MinValue;
+            menu.Show(this, _hwnd, _foregroundAtPress, avoidTop);
         EnsureAnimating();
         e.Handled = true;
     }

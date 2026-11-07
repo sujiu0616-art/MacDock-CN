@@ -46,16 +46,19 @@ internal sealed class DockMenu
     /// <summary>An item that opens a submenu; fill the returned section.</summary>
     public PopMenu AddSubmenu(string header) => _menu.AddSubmenu(header);
 
-    public void Show(Window owner, IntPtr ownerHwnd, IntPtr previousForeground)
+    /// <summary>
+    /// <paramref name="avoidTop"/> 是屏幕像素里"不许压住"的下界（Dock 玻璃板下沿）。
+    /// Dock 在屏幕顶部时菜单默认从光标右下弹出，正好盖住 Dock 本身，传这个值让它整体下移。
+    /// </summary>
+    public void Show(Window owner, IntPtr ownerHwnd, IntPtr previousForeground, int avoidTop = int.MinValue)
     {
         _ownerHwnd = ownerHwnd;
         _previousForeground = previousForeground;
         SetForegroundWindow(ownerHwnd); // allowed: the right click was the last input
 
         if (!GetCursorPos(out var p)) return;
-        _menu.Show(p.X, p.Y);
+        _menu.Show(p.X, p.Y, avoidTop);
     }
-
     /// <summary>在指定屏幕坐标弹出（--menu 预览用）。</summary>
     public void ShowAt(IntPtr ownerHwnd, int x, int y)
     {
