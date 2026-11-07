@@ -82,78 +82,101 @@ internal sealed class DockLayout
         RestPlateStart = restStart - m.Pad;
         RestPlateEnd = restStart + restLength + m.Pad;
 
-        // 1. Magnification: a smooth bump centred on the pointer.
-        double pos = restStart, magTotal = 0;
+        // ── 放大布局：照搬 smoothui 的 Dock 实现（有源码可对照）──
+        // https://github.com/educlopez/smoothui/blob/main/packages/smoothui/components/dock/index.tsx
+        //
+        // centreAt(i) = 静止中心 + gain * (∫falloff(i 到指针) - centreShift)
+        //   · 每个图标只看"自己到指针的距离"，**不累加**左边图标的增量
+        //     （累加会让左边任何一个放大都把右边整排推走）
+        //   · centreShift 用**首尾两个图标**的解析积分求居中补偿，不取样固定几个，
+        //     所以指针移动时它是连续函数，没有索引跳变带来的阶跃
+        double gain = amount * (m.MaxSize / s - 1);
+        double distance = m.Range * rangeScale;
+        double gain2 = amount2 * (m.MaxSize / s - 1);
+        double distance2 = m.Range * rangeScale2;
+
+        double pos = restStart;
         for (int i = 0; i < n; i++)
         {
             _restStarts[i] = pos;
-            // uniform：整排图标统一放大（顶部呼吸用）。和悬停放大走同一条通路 ——
-            // _magSlots 按 scale 变宽，后面的 origin/Starts 自然把相邻图标推开，
-            // 所以"放大 + 让位"用不着在渲染层重算间距。分隔符不参与。
-            double scale = slots[i].IsIcon ? uniform : 1;
-            double bump = 0;
-            // 两组独立的放大源：pointer=鼠标悬停，pointer2=通知呼吸。位置和强度都不同，
-            // 各算各的再用 Math.Max 叠加 —— 共用一组参数的话，鼠标一划到 Dock 上，
-            // 呼吸的图标整个就不鼓了（用户："通知呼吸会我悬停干扰"）。
-            if (slots[i].IsIcon)
-            {
-                double centreHere = pos + s * slots[i].Presence / 2;
-                bump = Math.Max(bump, Bump(pointer, amount, rangeScale, centreHere, m, s));
-                bump = Math.Max(bump, Bump(pointer2, amount2, rangeScale2, centreHere, m, s));
-            }
-            scale += bump;
-            _magSlots[i] = _restSlots[i] * scale;
-            Sizes[i] = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence * scale;
-            magTotal += _magSlots[i];
+            Sizes[i] = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence;
+            Starts[i] = pos;
             pos += _restSlots[i];
         }
-        double magLength = Math.Max(s, magTotal - g);
-        // 2. 位移 = 放大量的积分（macOS 的做法）：
-        //    每个图标 = 静止位置 + 它左边所有图标长出来的宽度之和。
-        //    这样每个图标只被推走"自己该让出的那份"，不重叠也不累积误差。
-        double[] grow = new double[n];
-        for (int i = 0; i < n; i++)
+
+        double shift = 0;
+        bool magnifying = gain > 0.0001 && pointer is double && n > 1;
+        if (magnifying)
         {
-            double baseW = (slots[i].IsIcon ? s : m.SeparatorWidth) * slots[i].Presence;
-            grow[i] = Sizes[i] - baseW;
+            double ptr = pointer!.Value - restStart;
+            double first = (_restStarts[0] - restStart + _restSlots[0] / 2) - ptr;
+            double last = (_restStarts[n - 1] - restStart + _restSlots[n - 1] / 2) - ptr;
+            shift = (FalloffIntegral(first, distance) + FalloffIntegral(last, distance)) * 0.5
+                  + s * (Falloff(last, distance) - Falloff(first, distance)) * 0.25;
         }
 
-        double cum = 0;
         for (int i = 0; i < n; i++)
         {
-            Starts[i] = _restStarts[i] + cum;
-            cum += grow[i];
-        }
+            if (!slots[i].IsIcon) continue;
+            double centreRest = _restStarts[i] - restStart + _restSlots[i] / 2;
 
-        // 3. 整体偏移只补偿"钟形被屏幕边截断"的那部分：
-        //    左右各看 4 个图标的宽度增量，取差的一半。
-        //    指针在 Dock 中间时左右相等 → offset = 0 → 整排一动不动（macOS 就是这样）。
-        //    之前用 origin = (length - magLength)/2，magLength 是整排总宽，指针一移动它就变，
-        //    整排被拽着平移 —— 那就是抖。
-        if (pointer is double pt && amount > 0 && n > 1)
-        {
-            int at = 0;
-            for (int i = 0; i < n; i++)
+            double scale = 1;
+            double centre = centreRest;
+            if (magnifying)
             {
-                if (pt >= _restStarts[i] && pt < _restStarts[i] + _restSlots[i]) { at = i; break; }
-                if (pt >= _restStarts[i]) at = i;
+                double delta = centreRest - (pointer!.Value - restStart);
+                scale += gain * Falloff(delta, distance);
+                centre += gain * (FalloffIntegral(delta, distance) - shift);
             }
-            double leftGrow = 0, rightGrow = 0;
-            for (int i = Math.Max(0, at - 4); i < at; i++) leftGrow += grow[i];
-            for (int i = at + 1; i <= Math.Min(n - 1, at + 4); i++) rightGrow += grow[i];
-            double offset = 0.5 * (leftGrow - rightGrow);
-            for (int i = 0; i < n; i++) Starts[i] += offset;
+
+            // 通知呼吸：只放大、不推动（幅度卡在间距的 9 成，两个相邻同时呼吸也不相交）
+            if (pointer2 is double p2 && gain2 > 0.0001)
+            {
+                double delta2 = centreRest - (p2 - restStart);
+                double bump2 = Math.Min(gain2 * Falloff(delta2, distance2), m.Gap * 0.9 / s);
+                scale = Math.Max(scale, 1 + bump2);
+            }
+
+            Sizes[i] = s * slots[i].Presence * scale;
+            Starts[i] = restStart + centre - Sizes[i] / 2;
         }
 
-        // 4. Never leave the screen.
+        // 槽位（ItemAt / 相邻间隙用）：一格 = 从本图标左边到下一个图标左边
+        for (int i = 0; i < n; i++)
+        {
+            _magSlots[i] = i < n - 1
+                ? Math.Max(Sizes[i], Starts[i + 1] - Starts[i])
+                : Sizes[i];
+        }
+
+        // 不越出屏幕：整排一起平移（只在贴边时触发，中间滑动时恒不生效）
+        if (n > 0)
         {
             double left = Starts[0] - m.Pad;
             double right = Starts[n - 1] + Sizes[n - 1] + m.Pad;
             if (left < 0) { for (int i = 0; i < n; i++) Starts[i] -= left; right -= left; }
             if (right > length) { double d = right - length; for (int i = 0; i < n; i++) Starts[i] -= d; }
         }
-        PlateStart = Starts[0] - m.Pad;
-        PlateEnd = Starts[n - 1] + Sizes[n - 1] + m.Pad;
+        PlateStart = n > 0 ? Starts[0] - m.Pad : restStart - m.Pad;
+        PlateEnd = n > 0 ? Starts[n - 1] + Sizes[n - 1] + m.Pad : restStart + restLength + m.Pad;
+    }
+
+    /// <summary>抬余弦衰减：指针处为 1，到影响半径处平缓归零。</summary>
+    static double Falloff(double delta, double distance)
+    {
+        if (distance <= 0) return 0;
+        double spread = Math.Abs(delta);
+        if (spread >= distance) return 0;
+        return (Math.Cos(Math.PI * spread / distance) + 1) * 0.5;
+    }
+
+    /// <summary>衰减函数的解析积分（smoothui 的 falloffIntegral）：位移用它算，才和放大量严格对应。</summary>
+    static double FalloffIntegral(double delta, double distance)
+    {
+        if (distance <= 0) return 0;
+        double sign = delta < 0 ? -1 : 1;
+        double spread = Math.Min(Math.Abs(delta), distance);
+        return sign * (distance / (2 * Math.PI) * Math.Sin(Math.PI * spread / distance) + spread * 0.5);
     }
 
 
