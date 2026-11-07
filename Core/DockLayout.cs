@@ -55,7 +55,7 @@ internal sealed class DockLayout
     /// <param name="pointer">Pointer position along the dock, or null when it has never been over it.</param>
     /// <param name="amount">0 = at rest, 1 = fully magnified (animated on enter / leave).</param>
     /// <summary>通知呼吸的放大幅度：1.0 → 1.10 → 1.0（设计规范里的 attention pulse 量级）。</summary>
-    const double BreatheScale = 0.10;
+    const double BreatheScale = 0.18;
 
     public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1,
         double? pointer2 = null, double amount2 = 0, double rangeScale2 = 1)
@@ -109,14 +109,12 @@ internal sealed class DockLayout
 
         double shift = 0, shift2 = 0;
         bool magnifying = gain > 0.0001 && pointer is double && n > 1;
-        if (magnifying)
-        {
-            double ptr = pointer!.Value - restStart;
-            double first = (_restStarts[0] - restStart + _restSlots[0] / 2) - ptr;
-            double last = (_restStarts[n - 1] - restStart + _restSlots[n - 1] / 2) - ptr;
-            shift = (FalloffIntegral(first, distance) + FalloffIntegral(last, distance)) * 0.5
-                  + s * (Falloff(last, distance) - Falloff(first, distance)) * 0.25;
-        }
+        // 居中补偿（smoothui 的 centreShift）**故意不用**。
+        // 它的前提是"容器宽度固定 = 静止宽度"，图标放大后会溢出，所以要拉回中心。
+        // 我们的 length 是整个窗口宽，Dock 内容只有一半不到，放大根本不会溢出 ——
+        // 而 shift 只在指针位于 Dock 正中时才为 0，一旦偏离中线（左右数量/宽度不对称）
+        // 它就把一个随指针连续变化的位移加到整排上，那正是滑动时的抖动。
+        // 去掉之后：Starts[i] = restStart + centre，左边界恒等于静止位置，零漂移。
 
         // 呼吸也用同一条通路（放大 + 推动），只是中心是通知图标。
         // 之前"只放大不推动"会让图标互相盖住，丑；压幅度又不够明显。
