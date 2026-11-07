@@ -810,7 +810,11 @@ internal sealed class DockWindow : Window
     {
         SyncWindows(); // most-recently-used order changed
         var owner = OwnerOf(window);
-        if (owner is not null && owner.Bounce.Kind == BounceKind.Attention) owner.Bounce.Stop(Now);
+        if (owner is not null && owner.Bounce.Kind == BounceKind.Attention)
+        {
+            Log.Info($"Bounce: attention stopped, {owner.Name} 的窗口被激活 (title={window.Title})");
+            owner.Bounce.Stop(Now);
+        }
     }
 
     void OnAttentionRequested(TrackedWindow window)

@@ -49,7 +49,11 @@ internal sealed class Bouncer
         if (Kind == BounceKind.Launch && t > LaunchTimeout && !_stopping) Stop(now);
         // Attention 原本没有超时，完全依赖"窗口被激活"来 Stop。用户如果用别的方式把窗口
         // 调到前台而 tracker 没抓到（或者根本没切），呼吸就会一直挂在那个图标上。
-        if (Kind == BounceKind.Attention && t > AttentionTimeout && !_stopping) Stop(now);
+        if (Kind == BounceKind.Attention && t > AttentionTimeout && !_stopping)
+        {
+            Log.Info($"Bounce: attention timeout after {t:0.0}s");
+            Stop(now);
+        }
 
         bool resting = Kind == BounceKind.Attention && t % Cycle >= AttentionBounces * AttentionPeriod;
         if (_stopping && (resting || BounceIndex(t) > _stopAfterBounce))
