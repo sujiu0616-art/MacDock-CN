@@ -16,7 +16,7 @@ internal sealed class Bouncer
 
     double _start;
     bool _stopping;
-    long _stopAfterBounce;
+
 
     public BounceKind Kind { get; private set; }
     public bool IsActive => Kind != BounceKind.None;
@@ -36,9 +36,12 @@ internal sealed class Bouncer
 
     public void Stop(double now)
     {
-        if (!IsActive || _stopping) return;
-        _stopping = true;
-        _stopAfterBounce = BounceIndex(now - _start);
+        // 立即把 Kind 清成 None。以前只是标记 _stopping、等 Offset() 内部再清，
+        // 而 Offset 只在渲染活跃时被调用 —— 渲染一停，Kind 就永远挂着，
+        // 于是多个图标同时 IsActive，呼吸被算在最旧的那个上（用户看到"漂移到别的图标"）。
+        // 弹跳本来就是"点一下就有反馈"的短动画，直接收掉没有副作用。
+        Kind = BounceKind.None;
+        _stopping = false;
     }
 
     /// <summary>Current lift, as a fraction of the icon size.</summary>
@@ -56,11 +59,6 @@ internal sealed class Bouncer
         }
 
         bool resting = Kind == BounceKind.Attention && t % Cycle >= AttentionBounces * AttentionPeriod;
-        if (_stopping && (resting || BounceIndex(t) > _stopAfterBounce))
-        {
-            Kind = BounceKind.None;
-            return 0;
-        }
         if (resting) return 0;
 
         double period = Kind == BounceKind.Launch ? LaunchPeriod : AttentionPeriod;

@@ -546,7 +546,6 @@ internal sealed class DockWindow : Window
     {
         base.OnContentRendered(e);
         if (Environment.GetCommandLineArgs().Contains(AutoStart.AutoStartArg)) SlideInAtStartup();
-        Log.Info($"StartupTiming: firstFrame={StartupTiming.ElapsedMilliseconds}ms at={DateTime.Now:HH:mm:ss.fff} procStart={System.Diagnostics.Process.GetCurrentProcess().StartTime:HH:mm:ss.fff}");
         Place();
 
     }
@@ -817,6 +816,18 @@ internal sealed class DockWindow : Window
         }
     }
 
+    /// <summary>
+    /// 同一时刻只允许一个图标在弹跳/呼吸。之前各个入口各调各的 Bounce.Start，
+    /// 旧的那个没人停，就会一直挂着 —— 呼吸于是显示在那个过期的图标上（用户看到"漂移到别的图标"）。
+    /// </summary>
+    void StartBounce(DockItem item, BounceKind kind)
+    {
+        foreach (var other in _pinned.Concat(_running))
+        {
+            if (!ReferenceEquals(other, item) && other.Bounce.IsActive) other.Bounce.Stop(Now);
+        }
+        item.Bounce.Start(kind, Now);
+    }
     void OnAttentionRequested(TrackedWindow window)
     {
         // The app is already in front: nothing to call attention to.
@@ -824,7 +835,7 @@ internal sealed class DockWindow : Window
         // 最小化到托盘的窗口不在任何分组里（OwnerOf 靠 Windows 列表匹配会落空），
         // 回退按身份找固定的那个图标 —— 否则托盘应用闪任务栏，Dock 一点反应都没有。
         var owner = OwnerOf(window) ?? _pinned.FirstOrDefault(p => p.Identity.Matches(window.Identity));
-        owner?.Bounce.Start(BounceKind.Attention, Now);
+        if (owner is not null) StartBounce(owner, BounceKind.Attention);
         EnsureAnimating();
     }
 
@@ -991,7 +1002,7 @@ internal sealed class DockWindow : Window
         {
             for (int i = 0; i < _entries.Count; i++)
             {
-                if (_entries[i].Bounce.IsActive) { breatheIndex = i; break; }
+                if (_entries[i].Bounce.IsActive) breatheIndex = i;   // 不 break：多个残留时以最新的为准
             }
         }
         _layout.Compute(_m, _slots, _length,
@@ -1789,7 +1800,7 @@ internal sealed class DockWindow : Window
     {
         // "默认以管理员启动"：开了就一律走提权路径（UAC 确认框由系统弹）
         // 点开时就跳一下（macOS 的启动弹跳）。genie 动画删掉之后，这里是唯一的"点开反馈"。
-        if (!item.IsStart && !item.IsTrash && !item.IsFolder) item.Bounce.Start(BounceKind.Launch, Now);
+        if (!item.IsStart && !item.IsTrash && !item.IsFolder) StartBounce(item, BounceKind.Launch);
         if (item.Config.RunAsAdmin && Launcher.CanRunAsAdmin(item))
         {
             SetForegroundWindow(_hwnd);
