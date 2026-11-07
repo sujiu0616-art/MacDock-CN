@@ -10,7 +10,7 @@ internal enum BounceKind { None, Launch, Attention }
 internal sealed class Bouncer
 {
     const double LaunchPeriod = 0.62, LaunchHeight = 0.5, LaunchTimeout = 12;
-    const double AttentionTimeout = 20;   // 兜底：通知最多提醒 20 秒
+    const double AttentionTimeout = 600;  // 兜底：10 分钟（真正的停止条件是切到那个应用的窗口）
     const double AttentionPeriod = 0.5, AttentionHeight = 0.65, AttentionPause = 1.1;
     const int AttentionBounces = 3;
 
