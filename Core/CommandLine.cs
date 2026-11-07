@@ -12,6 +12,8 @@ internal static class CommandLine
 {
     /// <summary>Message the running dock answers by quitting normally (taskbar restored, app bars released).</summary>
     public const string QuitMessageName = "MacDock.Quit";
+    /// <summary>Broadcast after the config changed on disk so a running dock can pick it up.</summary>
+    public const string ReloadMessageName = "MacDock.ReloadConfig";
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr FindWindow(string? className, string? windowName);
@@ -36,6 +38,8 @@ internal static class CommandLine
                 AutoStart.Set(false);
                 AutoStart.SetRestoreFallback(false);
                 return 0;
+            case "--add-to-dock":
+                return AddToDock(args.Skip(1));
             case "--set-autostart":
                 return SetAutostart(args.ElementAtOrDefault(1));
             case "--selftest":
@@ -53,6 +57,50 @@ internal static class CommandLine
             .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "0.0.0";
 
     /// <summary>Asks a running dock to quit and waits for it (and its guard) to be gone.</summary>
+    /// <summary>
+    /// Appends the given files/shortcuts to the pinned list and tells the running dock to reload.
+    /// Used by the Explorer context-menu entry ("添加到拓展坞").
+    /// </summary>
+    static int AddToDock(IEnumerable<string> paths)
+    {
+        var targets = paths
+            .Select(p => p.Trim().Trim('"'))
+            .Where(p => p.Length > 0 && (File.Exists(p) || Directory.Exists(p)))
+            .ToList();
+        if (targets.Count == 0) return 2;
+
+        var config = DockConfig.LoadOrCreate();
+        int added = 0;
+        foreach (var target in targets)
+        {
+            if (config.Items.Any(i => string.Equals(i.Target, target, StringComparison.OrdinalIgnoreCase))) continue;
+            config.Items.Add(new DockItemConfig { Name = DisplayName(target), Target = target });
+            added++;
+        }
+        if (added == 0) return 0;   // 已经在里面：不算失败，只是没事可做
+
+        config.Save();
+        Broadcast(ReloadMessageName);
+        Print($"added {added} item(s) to the dock");
+        return 0;
+    }
+
+    /// <summary>File name without extension; a folder keeps its own name.</summary>
+    static string DisplayName(string target)
+    {
+        var name = Path.GetFileNameWithoutExtension(target);
+        return string.IsNullOrWhiteSpace(name) ? Path.GetFileName(target) : name;
+    }
+
+    /// <summary>Post a registered message to the dock window so it reloads the config from disk.</summary>
+    static void Broadcast(string messageName)
+    {
+        uint msg = RegisterWindowMessage(messageName);
+        if (msg == 0) return;
+        var hwnd = FindWindow(null, AppInfo.Name);
+        if (hwnd != IntPtr.Zero) PostMessage(hwnd, msg, IntPtr.Zero, IntPtr.Zero);
+    }
+
     static bool Quit()
     {
         var running = Process.GetProcessesByName(AppInfo.Name).Where(p => p.Id != Environment.ProcessId).ToList();

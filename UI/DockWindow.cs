@@ -118,6 +118,7 @@ internal sealed class DockWindow : Window
     IntPtr _hwnd;
     uint _taskbarCreatedMessage;
     uint _quitMessage;
+    uint _reloadMessage;
     uint _explorerPid;
     RECT _windowPx;
     double _scale = 1;
@@ -453,6 +454,7 @@ internal sealed class DockWindow : Window
         HwndSource.FromHwnd(_hwnd)!.AddHook(WndProc);
         _taskbarCreatedMessage = RegisterWindowMessage("TaskbarCreated");
         _quitMessage = RegisterWindowMessage(CommandLine.QuitMessageName);
+        _reloadMessage = RegisterWindowMessage(CommandLine.ReloadMessageName);
 
 
         _taskbarHotkey = Hotkey.Register(_hwnd, TaskbarHotkeyId, _config.Settings.TaskbarHotkey);
@@ -736,6 +738,28 @@ internal sealed class DockWindow : Window
 
     // ───────────────────────── Running apps ─────────────────────────
 
+    /// <summary>
+    /// Re-reads the pinned list from disk. Used after "添加到拓展坞" writes a new entry, so the
+    /// running dock picks it up without a restart（RebuildEntries 会顺手补建/回收图标视图）。
+    /// </summary>
+    void ReloadPinned()
+    {
+        try
+        {
+            var config = DockConfig.LoadOrCreate();
+            _pinned.Clear();
+            _running.Clear();
+            foreach (var itemConfig in config.Items) _pinned.Add(new DockItem(itemConfig));
+            SyncWindows();
+            UpdateFrame();
+            EnsureAnimating();
+            Log.Info($"Dock reloaded: {_pinned.Count} pinned item(s)");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Reloading the dock from config");
+        }
+    }
     /// <summary>Hands every open window to the dock item of its app, creating items for unpinned apps.</summary>
     void SyncWindows()
     {
@@ -2409,6 +2433,13 @@ internal sealed class DockWindow : Window
             handled = true;
         }
 
+        else if (msg == _reloadMessage && _reloadMessage != 0)
+        {
+            // "MacDock.exe --add-to-dock <path>"：配置已经被命令行那边写好，这里重新读一遍。
+            Log.Info("Reloading the dock from config (context menu)");
+            Dispatcher.BeginInvoke(new Action(ReloadPinned));
+            handled = true;
+        }
         else if (_appBar is not null && msg == _appBar.CallbackMessage)
         {
             // Explorer 是**同步 SendMessage** 过来的：我们在这里花多久，shell 线程就卡多久
