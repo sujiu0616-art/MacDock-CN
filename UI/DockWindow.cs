@@ -893,7 +893,16 @@ internal sealed class DockWindow : Window
             // 用 macOS Dock 弹跳的实测关键帧（23 点 / 120fps / 峰值 128）当呼吸曲线，
             // 正弦是"匀速呼吸"、没有弹的重量感；这条是"弹一下 + 轻颤一下"。
             // Apple 文档里 informationalRequest 只弹 1 秒，这里按用户要求循环播放。
-            if (anyBouncing) breathTarget = 0.25 + 0.75 * SampleBounce(now / 0.9);
+            // ±10% 的 attention pulse 配套曲线：三角波过 smoothstep，等价 easeInOut，
+            // 周期 900ms（animate_kit 的 PulseAnimation 默认值）。
+            // 之前用的 Dock 弹跳关键帧是给"位移"设计的，套到缩放上会显得跳动。
+            if (anyBouncing)
+            {
+                double phase = now / 0.9;
+                phase -= Math.Floor(phase);
+                double tri = 1 - Math.Abs(2 * phase - 1);
+                breathTarget = tri * tri * (3 - 2 * tri);
+            }
         }
         if (breathTarget > 0) _breathPtrSet = true;
         _breath = Approach(_breath, breathTarget, dt, 0.05);

@@ -54,6 +54,9 @@ internal sealed class DockLayout
     /// <param name="length">Length of the dock window along the edge.</param>
     /// <param name="pointer">Pointer position along the dock, or null when it has never been over it.</param>
     /// <param name="amount">0 = at rest, 1 = fully magnified (animated on enter / leave).</param>
+    /// <summary>通知呼吸的放大幅度：1.0 → 1.10 → 1.0（设计规范里的 attention pulse 量级）。</summary>
+    const double BreatheScale = 0.10;
+
     public void Compute(DockMetrics m, IReadOnlyList<DockSlot> slots, double length, double? pointer, double amount, double uniform = 1, double rangeScale = 1,
         double? pointer2 = null, double amount2 = 0, double rangeScale2 = 1)
     {
@@ -143,32 +146,17 @@ internal sealed class DockLayout
 
             if (breathing)
             {
-                // 呼吸只放大**尺寸**，不动 centre：
-                // smoothui 的位移带 centreShift，而呼吸量每帧都在变，
-                // 那个补偿会让整排每帧平移一次 —— 那正是呼吸时的抖动。
-                // 放大需要的空间在循环后统一从间隙里扣（总宽锁定），所以也不会重叠。
+                // 幅度固定 10%：设计规范里 attention pulse 就是 1.0 -> 1.1 -> 1.0
+                // （animate_kit PulseAnimation: minScale 0.9 / 900ms / easeInOut）。
+                // 我们的 Gap 是 13.5%，10% 的放大压不到邻居，所以不需要推动，
+                // 也就没有任何位移 —— 抖动在这一层被彻底去掉。
                 double delta2 = centreRest - (pointer2!.Value - restStart);
-                scale += gain2 * Falloff(delta2, distance2);
+                scale += BreatheScale * Falloff(delta2, distance2);
             }
             // 两个 bump 叠起来最多到"悬停最大尺寸"，不再往上涨
             scale = Math.Min(scale, m.MaxSize / s);
             Sizes[i] = s * slots[i].Presence * scale;
             Starts[i] = restStart + centre - Sizes[i] / 2;
-        }
-
-        // 呼吸（且没有鼠标悬停）：总宽锁定在 restLength，放大只吃间隙。
-        // 这样左边界恒为 restStart，整排永远不漂；间隙扣到 0 就相贴，也不会重叠。
-        if (breathing && !magnifying && n > 1)
-        {
-            double iconTotal = 0;
-            for (int i = 0; i < n; i++) iconTotal += Sizes[i];
-            double gapEach = Math.Max(0, (restLength - iconTotal) / (n - 1));
-            double p = restStart;
-            for (int i = 0; i < n; i++)
-            {
-                Starts[i] = p;
-                p += Sizes[i] + (i < n - 1 ? gapEach : 0);
-            }
         }
 
         // 槽位（ItemAt / 相邻间隙用）：一格 = 从本图标左边到下一个图标左边
