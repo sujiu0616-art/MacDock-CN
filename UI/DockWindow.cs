@@ -193,6 +193,7 @@ internal sealed class DockWindow : Window
     double _magnify;        // 0 rest .. 1 magnified
     double _hide;           // 0 shown .. 1 hidden
     bool _hideRequested;
+    bool _lockOpen;         // 桌面上被手动呼出过 → 保持展开，直到出现窗口
     bool _animating;
     double _lastTick;
     bool _placePending;
@@ -931,13 +932,27 @@ internal sealed class DockWindow : Window
             if (entry.Bounce.Kind is BounceKind.Launch or BounceKind.Attention) { bouncing = true; break; }
         }
         // （下面还有一处 busy 表示动画忙，别重名）
-        // Win+D（显示桌面）之后前台是桌面本身（Progman / WorkerW / SHELLDLL_DefView）。
-        // 桌面上没有任何窗口，这时候 Dock 就该一直露着 —— 用户要的就是这个：
-        // 一到桌面 Dock 常驻、不自动收起；切到任意窗口后立刻交还给自动隐藏。
+        // 无窗口（桌面）时的收起策略 —— 用户要的是：
+        //   · 默认仍然收起
+        //   · 但只要手动把它呼出来过一次，就锁住保持展开，移开鼠标也不收回
+        //     （桌面上没有别的入口，收回去等于让用户再摸一次顶边）
+        //   · 一旦出现窗口，解锁，恢复正常自动隐藏
+        //
+        // 判据用 _hideRequested 而不是 _hide：_hideRequested 变 false 就代表"用户要它显示"，
+        // 用 _hide 的中间值会在动画途中反复触发。
         bool onDesktop = false;
         var fg = GetForegroundWindow();
-        if (fg != IntPtr.Zero) onDesktop = GetClassName(fg) is "Progman" or "WorkerW" or "SHELLDLL_DefView";
-        double hideTarget = _hideRequested && !bouncing && !onDesktop ? 1 : 0;
+        IntPtr fgRoot = fg == IntPtr.Zero ? IntPtr.Zero : GetAncestor(fg, 2 /* GA_ROOT */);
+        string fgClass = fgRoot == IntPtr.Zero ? "" : GetClassName(fgRoot);
+        // Win+D 之后前台实测是 Shell_TrayWnd（任务栏自己），不是 Progman/WorkerW
+        onDesktop = fg == IntPtr.Zero
+            || fgClass is "Progman" or "WorkerW" or "SHELLDLL_DefView"
+                       or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd";
+
+        if (!onDesktop) _lockOpen = false;
+        else if (!_hideRequested) _lockOpen = true;
+
+        double hideTarget = _hideRequested && !bouncing && !_lockOpen ? 1 : 0;
         _hide = Approach(_hide, hideTarget, dt, 0.065);
 
         bool busy = false;
