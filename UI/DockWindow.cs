@@ -2604,20 +2604,12 @@ internal sealed class DockWindow : Window
     /// </summary>
     void EnsureDockOnTop()
     {
-        if (_fullscreen || _hide > 0.5 || _launchpadOpen || _hwnd == IntPtr.Zero) return;
-        if (_windowPx.Width <= 0 || _windowPx.Height <= 0) return;
-
-        var point = new POINT
-        {
-            X = _windowPx.Left + _windowPx.Width / 2,
-            Y = _windowPx.Top + Math.Max(4, _windowPx.Height / 6),   // 玻璃板所在的那一带
-        };
-        var under = WindowFromPoint(point);
-        if (under == IntPtr.Zero || under == _hwnd || under == _backdrop.Handle) return;
-
-        SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        SetWindowPos(_backdrop.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        Log.Info($"Dock was covered by hwnd {under}, brought back to front");
+        // 停用。这个兜底每 120ms 采一次样，收起/展开过程中采样点经常落在空白处、
+        // 返回下面的窗口，于是误判"被覆盖"并反复 SetWindowPos —— 那些重定位会打断
+        // 窗口的 MouseLeave，_hideRequested 停在 false，表现就是：呼出来之后收不回去、
+        // 收起之后又呼不出来。Dock 本身就是 TOPMOST，真正能压住它的只有同级 TOPMOST 窗口，
+        // 代价远小于这个兜底带来的副作用。
+        return;
     }
 
     [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT point);
