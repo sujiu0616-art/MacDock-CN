@@ -99,6 +99,8 @@ internal sealed class DockWindow : Window
     // 于是第一次 SetBounds 被缓存吃掉，玻璃板会停在窗口默认的 -32768 位置上。
     RECT _lastPlateBounds = new RECT { Left = -1, Top = -1, Right = -1, Bottom = -1 };
     int _lastGlassRadius = -1;
+    double _desktopShowUntil;   // 进入桌面（Win+D）后短暂强制展开的截止时刻
+    bool _wasOnDesktop;         // 上一帧前台是不是桌面，用于边沿触发
     double _breath;         // 平滑后的呼吸量 0..1
     double _breathPtr;      // 平滑后的呼吸中心（DIU）
     bool _breathPtrSet;
@@ -931,15 +933,17 @@ internal sealed class DockWindow : Window
             if (entry.Bounce.Kind is BounceKind.Launch or BounceKind.Attention) { bouncing = true; break; }
         }
         // （下面还有一处 busy 表示动画忙，别重名）
-        // Win+D（显示桌面）之后所有窗口都被收起，这时的前台是桌面本身（Progman / WorkerW）。
-        // 如果这时候 Dock 还按"鼠标不在 Dock 上"的逻辑收起来，用户就彻底没有入口了 ——
-        // 之前必须再按一次 Win 键才能把它叫出来（那条路径走强制显示）。
-        // 桌面前台时强制展开，和 macOS 显示桌面后 Dock 仍然可见一致。
+        // Win+D（显示桌面）之后前台变成桌面本身（Progman / WorkerW），那时如果 Dock
+        // 还按"鼠标不在它上面"收起来，用户就没有入口了。
+        // 但**只在进入桌面的那一刻**露 2 秒，之后照常自动隐藏 ——
+        // 否则桌面前台期间会一直强制展开，呼出来就再也收不回去。
         bool onDesktop = false;
         var fg = GetForegroundWindow();
         if (fg != IntPtr.Zero) onDesktop = GetClassName(fg) is "Progman" or "WorkerW" or "SHELLDLL_DefView";
-        double hideTarget = _hideRequested && !bouncing && !onDesktop ? 1 : 0;
-        _hide = Approach(_hide, hideTarget, dt, 0.065);
+        if (onDesktop && !_wasOnDesktop) _desktopShowUntil = now + 2.0;
+        _wasOnDesktop = onDesktop;
+        bool desktopFlash = now < _desktopShowUntil;
+        double hideTarget = _hideRequested && !bouncing && !desktopFlash ? 1 : 0;
 
         bool busy = false;
         foreach (var item in _entries)
