@@ -938,6 +938,7 @@ internal sealed class DockWindow : Window
         var fg = GetForegroundWindow();
         if (fg != IntPtr.Zero) onDesktop = GetClassName(fg) is "Progman" or "WorkerW" or "SHELLDLL_DefView";
         double hideTarget = _hideRequested && !bouncing && !onDesktop ? 1 : 0;
+        _hide = Approach(_hide, hideTarget, dt, 0.065);
 
         bool busy = false;
         foreach (var item in _entries)
