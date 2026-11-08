@@ -931,7 +931,14 @@ internal sealed class DockWindow : Window
             if (entry.Bounce.Kind is BounceKind.Launch or BounceKind.Attention) { bouncing = true; break; }
         }
         // （下面还有一处 busy 表示动画忙，别重名）
-        double hideTarget = _hideRequested && !bouncing ? 1 : 0;
+        // Win+D（显示桌面）之后所有窗口都被收起，这时的前台是桌面本身（Progman / WorkerW）。
+        // 如果这时候 Dock 还按"鼠标不在 Dock 上"的逻辑收起来，用户就彻底没有入口了 ——
+        // 之前必须再按一次 Win 键才能把它叫出来（那条路径走强制显示）。
+        // 桌面前台时强制展开，和 macOS 显示桌面后 Dock 仍然可见一致。
+        bool onDesktop = false;
+        var fg = GetForegroundWindow();
+        if (fg != IntPtr.Zero) onDesktop = GetClassName(fg) is "Progman" or "WorkerW" or "SHELLDLL_DefView";
+        double hideTarget = _hideRequested && !bouncing && !onDesktop ? 1 : 0;
         _hide = Approach(_hide, hideTarget, dt, 0.065);
 
         bool busy = false;
