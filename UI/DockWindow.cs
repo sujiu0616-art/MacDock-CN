@@ -99,8 +99,6 @@ internal sealed class DockWindow : Window
     // 于是第一次 SetBounds 被缓存吃掉，玻璃板会停在窗口默认的 -32768 位置上。
     RECT _lastPlateBounds = new RECT { Left = -1, Top = -1, Right = -1, Bottom = -1 };
     int _lastGlassRadius = -1;
-    double _desktopShowUntil;   // 进入桌面（Win+D）后短暂强制展开的截止时刻
-    bool _wasOnDesktop;         // 上一帧前台是不是桌面，用于边沿触发
     double _breath;         // 平滑后的呼吸量 0..1
     double _breathPtr;      // 平滑后的呼吸中心（DIU）
     bool _breathPtrSet;
@@ -933,17 +931,13 @@ internal sealed class DockWindow : Window
             if (entry.Bounce.Kind is BounceKind.Launch or BounceKind.Attention) { bouncing = true; break; }
         }
         // （下面还有一处 busy 表示动画忙，别重名）
-        // Win+D（显示桌面）之后前台变成桌面本身（Progman / WorkerW），那时如果 Dock
-        // 还按"鼠标不在它上面"收起来，用户就没有入口了。
-        // 但**只在进入桌面的那一刻**露 2 秒，之后照常自动隐藏 ——
-        // 否则桌面前台期间会一直强制展开，呼出来就再也收不回去。
+        // Win+D（显示桌面）之后前台是桌面本身（Progman / WorkerW / SHELLDLL_DefView）。
+        // 桌面上没有任何窗口，这时候 Dock 就该一直露着 —— 用户要的就是这个：
+        // 一到桌面 Dock 常驻、不自动收起；切到任意窗口后立刻交还给自动隐藏。
         bool onDesktop = false;
         var fg = GetForegroundWindow();
         if (fg != IntPtr.Zero) onDesktop = GetClassName(fg) is "Progman" or "WorkerW" or "SHELLDLL_DefView";
-        if (onDesktop && !_wasOnDesktop) _desktopShowUntil = now + 2.0;
-        _wasOnDesktop = onDesktop;
-        bool desktopFlash = now < _desktopShowUntil;
-        double hideTarget = _hideRequested && !bouncing && !desktopFlash ? 1 : 0;
+        double hideTarget = _hideRequested && !bouncing && !onDesktop ? 1 : 0;
 
         bool busy = false;
         foreach (var item in _entries)
@@ -1220,7 +1214,11 @@ internal sealed class DockWindow : Window
         if (_hide > 0.99)
         {
             // Hidden: a thin strip on the screen edge brings the dock back.
-            _zone = (_layout.RestPlateStart, _layout.RestPlateEnd, 0, 2);
+            // 唤醒带盖住**整个窗口宽度**，不是只盖住静止时玻璃板那一段。
+            // 之前用 RestPlateStart..RestPlateEnd（Dock 内容居中，左右各空三百多 DIU），
+            // 鼠标推到屏幕顶部中间或两侧时落在带子外面，_hitArea 收不到 MouseMove，
+            // 于是"呼不出来"。窗口本身就是全宽，直接铺满即可。
+            _zone = (0, _length, 0, 2);
         }
         else
         {
